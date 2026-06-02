@@ -1,0 +1,1097 @@
+// Package server provides the MCP server setup and tool registration for tree-sitter analysis.
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"tree-sitter-mcp/internal/container"
+	"tree-sitter-mcp/internal/language"
+	"tree-sitter-mcp/internal/models"
+	"tree-sitter-mcp/internal/tools"
+)
+
+// MCPServer wraps the MCP server and its dependencies.
+type MCPServer struct {
+	srv       *mcp.Server
+	container *container.Container
+}
+
+// NewMCPServer creates a new MCP server with all tools registered.
+func NewMCPServer() *MCPServer {
+	ctr := container.NewContainer()
+
+	impl := &mcp.Implementation{
+		Name:    "tree_sitter",
+		Version: "0.1.0",
+	}
+
+	mcpServer := mcp.NewServer(impl, nil)
+
+	s := &MCPServer{
+		srv:       mcpServer,
+		container: ctr,
+	}
+
+	s.registerTools()
+	return s
+}
+
+// Run starts the MCP server on stdio.
+func (s *MCPServer) Run() error {
+	return s.srv.Run(context.Background(), &mcp.StdioTransport{})
+}
+
+// GetContainer returns the dependency container for external configuration.
+func (s *MCPServer) GetContainer() *container.Container {
+	return s.container
+}
+
+// --- Tool argument types (used for automatic schema inference) ---
+
+type configureArgs struct {
+	ConfigPath    *string `json:"config_path,omitempty"`
+	CacheEnabled  *bool   `json:"cache_enabled,omitempty"`
+	MaxFileSizeMB *int    `json:"max_file_size_mb,omitempty"`
+	LogLevel      *string `json:"log_level,omitempty"`
+}
+
+type registerProjectArgs struct {
+	Path        string  `json:"path"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+type projectNameArgs struct {
+	Name string `json:"name"`
+}
+
+type languageNameArgs struct {
+	Language string `json:"language"`
+}
+
+type listFilesArgs struct {
+	Project    string   `json:"project"`
+	Pattern    *string  `json:"pattern,omitempty"`
+	MaxDepth   *int     `json:"max_depth,omitempty"`
+	Extensions []string `json:"extensions,omitempty"`
+}
+
+type getFileArgs struct {
+	Project   string `json:"project"`
+	Path      string `json:"path"`
+	MaxLines  *int   `json:"max_lines,omitempty"`
+	StartLine *int   `json:"start_line,omitempty"`
+}
+
+type fileMetadataArgs struct {
+	Project string `json:"project"`
+	Path    string `json:"path"`
+}
+
+type getASTArgs struct {
+	Project     string `json:"project"`
+	Path        string `json:"path"`
+	MaxDepth    *int   `json:"max_depth,omitempty"`
+	IncludeText *bool  `json:"include_text,omitempty"`
+}
+
+type nodePosArgs struct {
+	Project string `json:"project"`
+	Path    string `json:"path"`
+	Row     int    `json:"row"`
+	Column  int    `json:"column"`
+}
+
+type findTextArgs struct {
+	Project       string  `json:"project"`
+	Pattern       string  `json:"pattern"`
+	FilePattern   *string `json:"file_pattern,omitempty"`
+	MaxResults    *int    `json:"max_results,omitempty"`
+	CaseSensitive *bool   `json:"case_sensitive,omitempty"`
+	WholeWord     *bool   `json:"whole_word,omitempty"`
+	UseRegex      *bool   `json:"use_regex,omitempty"`
+	ContextLines  *int    `json:"context_lines,omitempty"`
+}
+
+type runQueryArgs struct {
+	Project       string  `json:"project"`
+	Query         string  `json:"query"`
+	FilePath      *string `json:"file_path,omitempty"`
+	Language      *string `json:"language,omitempty"`
+	MaxResults    *int    `json:"max_results,omitempty"`
+	CaptureFilter *string `json:"capture_filter,omitempty"`
+	Compact       *bool   `json:"compact,omitempty"`
+}
+
+type queryTemplateArgs struct {
+	Language     string `json:"language"`
+	TemplateName string `json:"template_name"`
+}
+
+type listQueryTemplatesArgs struct {
+	Language *string `json:"language,omitempty"`
+}
+
+type getSymbolsArgs struct {
+	Project     string   `json:"project"`
+	FilePath    string   `json:"file_path"`
+	SymbolTypes []string `json:"symbol_types,omitempty"`
+}
+
+type analyzeProjectArgs struct {
+	Project   string `json:"project"`
+	ScanDepth *int   `json:"scan_depth,omitempty"`
+}
+
+type filePathArgs struct {
+	Project  string `json:"project"`
+	FilePath string `json:"file_path"`
+}
+
+type findUsageArgs struct {
+	Project  string  `json:"project"`
+	Symbol   string  `json:"symbol"`
+	FilePath *string `json:"file_path,omitempty"`
+	Language *string `json:"language,omitempty"`
+}
+
+type clearCacheArgs struct {
+	Project  *string `json:"project,omitempty"`
+	FilePath *string `json:"file_path,omitempty"`
+}
+
+type buildQueryArgs struct {
+	Language string   `json:"language"`
+	Patterns []string `json:"patterns"`
+	Combine  *string  `json:"combine,omitempty"`
+}
+
+type adaptQueryArgs struct {
+	Query    string `json:"query"`
+	FromLang string `json:"from_language"`
+	ToLang   string `json:"to_language"`
+}
+
+type getNodeTypesArgs struct {
+	Language *string `json:"language,omitempty"`
+}
+
+type findSimilarCodeArgs struct {
+	Project       string   `json:"project"`
+	FilePath      string   `json:"file_path"`
+	MaxResults    *int     `json:"max_results,omitempty"`
+	MinSimilarity *float64 `json:"min_similarity,omitempty"`
+}
+
+type diagnoseConfigArgs struct {
+	ConfigPath string `json:"config_path"`
+}
+
+func (s *MCPServer) registerTools() {
+	// --- configure ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "configure",
+		Description: "Configure the server settings (config_path, cache_enabled, max_file_size_mb, log_level).",
+	}, s.handleConfigure)
+
+	// --- register_project ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "register_project",
+		Description: "Register a project directory for code exploration.",
+	}, s.handleRegisterProject)
+
+	// --- list_projects ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "list_projects",
+		Description: "List all registered projects.",
+	}, s.handleListProjects)
+
+	// --- remove_project ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "remove_project",
+		Description: "Remove a registered project.",
+	}, s.handleRemoveProject)
+
+	// --- list_languages ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "list_languages",
+		Description: "List available tree-sitter languages.",
+	}, s.handleListLanguages)
+
+	// --- check_language ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "check_language",
+		Description: "Check if a tree-sitter language parser is available.",
+	}, s.handleCheckLanguage)
+
+	// --- list_files ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "list_files",
+		Description: "List files in a project, optionally filtered by pattern, depth, and extensions.",
+	}, s.handleListFiles)
+
+	// --- get_file ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_file",
+		Description: "Get the content of a file in a project.",
+	}, s.handleGetFile)
+
+	// --- get_file_metadata ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_file_metadata",
+		Description: "Get metadata for a file (size, modification time, etc.).",
+	}, s.handleGetFileMetadata)
+
+	// --- get_ast ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_ast",
+		Description: "Get the abstract syntax tree (AST) for a file as a nested JSON structure.",
+	}, s.handleGetAST)
+
+	// --- get_node_at_position ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_node_at_position",
+		Description: "Find the AST node at a specific row and column position in a file.",
+	}, s.handleGetNodeAtPosition)
+
+	// --- find_text ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "find_text",
+		Description: "Search for a text pattern in project files with regex, case, and context support.",
+	}, s.handleFindText)
+
+	// --- run_query ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "run_query",
+		Description: "Run a tree-sitter query (S-expression) on project files.",
+	}, s.handleRunQuery)
+
+	// --- get_query_template ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_query_template",
+		Description: "Get a predefined tree-sitter query template (e.g., functions, classes, imports).",
+	}, s.handleGetQueryTemplate)
+
+	// --- list_query_templates ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "list_query_templates",
+		Description: "List available tree-sitter query templates, optionally filtered by language.",
+	}, s.handleListQueryTemplates)
+
+	// --- get_symbols ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_symbols",
+		Description: "Extract symbols (functions, classes, imports, etc.) from a file.",
+	}, s.handleGetSymbols)
+
+	// --- analyze_project ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "analyze_project",
+		Description: "Analyze overall project structure: file counts, languages, top-level files.",
+	}, s.handleAnalyzeProject)
+
+	// --- get_dependencies ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_dependencies",
+		Description: "Find the dependencies (imports/includes) of a file.",
+	}, s.handleGetDependencies)
+
+	// --- analyze_complexity ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "analyze_complexity",
+		Description: "Analyze code complexity: line count, function count, average function length.",
+	}, s.handleAnalyzeComplexity)
+
+	// --- find_usage ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "find_usage",
+		Description: "Find all usages of a symbol (identifier) across project files.",
+	}, s.handleFindUsage)
+
+	// --- clear_cache ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "clear_cache",
+		Description: "Clear the parse tree cache, optionally scoped to a project or file.",
+	}, s.handleClearCache)
+
+	// --- build_query ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "build_query",
+		Description: "Combine multiple query templates or raw patterns (OR/AND) into a compound tree-sitter query.",
+	}, s.handleBuildQuery)
+
+	// --- adapt_query ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "adapt_query",
+		Description: "Adapt a tree-sitter query from one language to another by translating node type names.",
+	}, s.handleAdaptQuery)
+
+	// --- get_node_types ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_node_types",
+		Description: "Get descriptions of common AST node types for a language, or list all available languages.",
+	}, s.handleGetNodeTypes)
+
+	// --- find_similar_code ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "find_similar_code",
+		Description: "Find structurally similar code in a project using AST fingerprinting and Jaccard similarity.",
+	}, s.handleFindSimilarCode)
+
+	// --- diagnose_config ---
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "diagnose_config",
+		Description: "Diagnose issues with YAML configuration loading (file existence, YAML validity, config changes).",
+	}, s.handleDiagnoseConfig)
+
+	// Register prompts.
+	s.registerPrompts()
+}
+
+// --- Handler Implementations ---
+
+func (s *MCPServer) handleConfigure(ctx context.Context, req *mcp.CallToolRequest, args configureArgs) (*mcp.CallToolResult, any, error) {
+	cfgMgr := s.container.ConfigManager
+
+	if args.ConfigPath != nil && *args.ConfigPath != "" {
+		if err := cfgMgr.LoadFromFile(*args.ConfigPath); err != nil {
+			return nil, nil, fmt.Errorf("failed to load config: %w", err)
+		}
+		s.container.ApplyConfig()
+	}
+	if args.CacheEnabled != nil {
+		cfgMgr.UpdateValue("cache.enabled", *args.CacheEnabled)
+		s.container.TreeCache.SetEnabled(*args.CacheEnabled)
+	}
+	if args.MaxFileSizeMB != nil {
+		cfgMgr.UpdateValue("security.max_file_size_mb", *args.MaxFileSizeMB)
+		s.container.ApplyConfig()
+	}
+	if args.LogLevel != nil && *args.LogLevel != "" {
+		cfgMgr.UpdateValue("log_level", *args.LogLevel)
+	}
+
+	return textResult(formatJSON(cfgMgr.ToMap())), nil, nil
+}
+
+func (s *MCPServer) handleRegisterProject(ctx context.Context, req *mcp.CallToolRequest, args registerProjectArgs) (*mcp.CallToolResult, any, error) {
+	name := ""
+	if args.Name != nil {
+		name = *args.Name
+	}
+	desc := ""
+	if args.Description != nil {
+		desc = *args.Description
+	}
+
+	cfg := s.container.GetConfig()
+	project, err := s.container.ProjectRegistry.RegisterProject(name, args.Path, desc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to register project: %w", err)
+	}
+
+	project.ScanFiles(s.container.LanguageRegistry, cfg.Security.ExcludedDirs)
+	return textResult(formatJSON(project.ToMap())), nil, nil
+}
+
+func (s *MCPServer) handleListProjects(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	projects := s.container.ProjectRegistry.ListProjects()
+	return textResult(formatJSON(projects)), nil, nil
+}
+
+func (s *MCPServer) handleRemoveProject(ctx context.Context, req *mcp.CallToolRequest, args projectNameArgs) (*mcp.CallToolResult, any, error) {
+	if err := s.container.ProjectRegistry.RemoveProject(args.Name); err != nil {
+		return nil, nil, fmt.Errorf("failed to remove project: %w", err)
+	}
+	return textResult(fmt.Sprintf(`{"status":"success","message":"Project '%s' removed"}`, args.Name)), nil, nil
+}
+
+func (s *MCPServer) handleListLanguages(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	langs := s.container.LanguageRegistry.ListAvailableLanguages()
+	return textResult(formatJSON(map[string]any{
+		"available":   langs,
+		"installable": []string{},
+	})), nil, nil
+}
+
+func (s *MCPServer) handleCheckLanguage(ctx context.Context, req *mcp.CallToolRequest, args languageNameArgs) (*mcp.CallToolResult, any, error) {
+	if s.container.LanguageRegistry.IsLanguageAvailable(args.Language) {
+		return textResult(fmt.Sprintf(`{"status":"success","message":"Language '%s' is available"}`, args.Language)), nil, nil
+	}
+	return textResult(fmt.Sprintf(`{"status":"error","message":"Language '%s' is not available"}`, args.Language)), nil, nil
+}
+
+func (s *MCPServer) handleListFiles(ctx context.Context, req *mcp.CallToolRequest, args listFilesArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	pattern := "**/*"
+	if args.Pattern != nil {
+		pattern = *args.Pattern
+	}
+
+	files, err := tools.ListProjectFiles(project, pattern, args.MaxDepth, args.Extensions)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error listing files: %w", err)
+	}
+	return textResult(formatJSON(files)), nil, nil
+}
+
+func (s *MCPServer) handleGetFile(ctx context.Context, req *mcp.CallToolRequest, args getFileArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	startLine := 0
+	if args.StartLine != nil {
+		startLine = *args.StartLine
+	}
+
+	content, err := tools.GetFileContent(project, args.Path, args.MaxLines, startLine)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error reading file: %w", err)
+	}
+	return textResult(content), nil, nil
+}
+
+func (s *MCPServer) handleGetFileMetadata(ctx context.Context, req *mcp.CallToolRequest, args fileMetadataArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	info, err := tools.GetFileInfo(project, args.Path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting file info: %w", err)
+	}
+	return textResult(formatJSON(info)), nil, nil
+}
+
+func (s *MCPServer) handleGetAST(ctx context.Context, req *mcp.CallToolRequest, args getASTArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	cfg := s.container.GetConfig()
+	maxDepth := cfg.Language.DefaultMaxDepth
+	if args.MaxDepth != nil {
+		maxDepth = *args.MaxDepth
+	}
+
+	includeText := true
+	if args.IncludeText != nil {
+		includeText = *args.IncludeText
+	}
+
+	ast, err := tools.GetFileAST(project, args.Path, s.container.LanguageRegistry, s.container.TreeCache, &maxDepth, includeText)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error parsing AST: %w", err)
+	}
+	return textResult(formatJSON(ast)), nil, nil
+}
+
+func (s *MCPServer) handleGetNodeAtPosition(ctx context.Context, req *mcp.CallToolRequest, args nodePosArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	absPath, err := project.ResolveFilePath(args.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	lang := s.container.LanguageRegistry.LanguageForFile(args.Path)
+	if lang == "" {
+		return nil, nil, fmt.Errorf("could not detect language for %s", args.Path)
+	}
+
+	tree, sourceBytes, err := tools.ParseFile(absPath, lang, s.container.LanguageRegistry, s.container.TreeCache)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error parsing file: %w", err)
+	}
+
+	node := tools.FindNodeAtPos(tree.RootNode(), args.Row, args.Column)
+	if node == nil {
+		return textResult("null"), nil, nil
+	}
+
+	result := models.NodeToMap(node, sourceBytes, true, true, 2)
+	return textResult(formatJSON(result)), nil, nil
+}
+
+func (s *MCPServer) handleFindText(ctx context.Context, req *mcp.CallToolRequest, args findTextArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	maxResults := 100
+	if args.MaxResults != nil {
+		maxResults = *args.MaxResults
+	}
+
+	caseSensitive := false
+	if args.CaseSensitive != nil {
+		caseSensitive = *args.CaseSensitive
+	}
+	wholeWord := false
+	if args.WholeWord != nil {
+		wholeWord = *args.WholeWord
+	}
+	useRegex := false
+	if args.UseRegex != nil {
+		useRegex = *args.UseRegex
+	}
+	contextLines := 2
+	if args.ContextLines != nil {
+		contextLines = *args.ContextLines
+	}
+
+	filePattern := "**/*"
+	if args.FilePattern != nil {
+		filePattern = *args.FilePattern
+	}
+
+	results, err := tools.SearchText(project, args.Pattern, filePattern, maxResults, caseSensitive, wholeWord, useRegex, contextLines)
+	if err != nil {
+		return nil, nil, fmt.Errorf("search error: %w", err)
+	}
+	return textResult(formatJSON(results)), nil, nil
+}
+
+func (s *MCPServer) handleRunQuery(ctx context.Context, req *mcp.CallToolRequest, args runQueryArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	maxResults := 100
+	if args.MaxResults != nil {
+		maxResults = *args.MaxResults
+	}
+
+	filePath := ""
+	if args.FilePath != nil {
+		filePath = *args.FilePath
+	}
+	lang := ""
+	if args.Language != nil {
+		lang = *args.Language
+	}
+	captureFilter := ""
+	if args.CaptureFilter != nil {
+		captureFilter = *args.CaptureFilter
+	}
+	compact := false
+	if args.Compact != nil {
+		compact = *args.Compact
+	}
+
+	results, err := tools.RunQuery(project, args.Query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, maxResults, captureFilter, compact)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query error: %w", err)
+	}
+	return textResult(formatJSON(results)), nil, nil
+}
+
+func (s *MCPServer) handleGetQueryTemplate(ctx context.Context, req *mcp.CallToolRequest, args queryTemplateArgs) (*mcp.CallToolResult, any, error) {
+	tmpl := language.GetQueryTemplate(args.Language, args.TemplateName)
+	if tmpl == "" {
+		return nil, nil, fmt.Errorf("no template '%s' for language '%s'", args.TemplateName, args.Language)
+	}
+
+	return textResult(formatJSON(map[string]string{
+		"language": args.Language,
+		"name":     args.TemplateName,
+		"query":    tmpl,
+	})), nil, nil
+}
+
+func (s *MCPServer) handleListQueryTemplates(ctx context.Context, req *mcp.CallToolRequest, args listQueryTemplatesArgs) (*mcp.CallToolResult, any, error) {
+	lang := ""
+	if args.Language != nil {
+		lang = *args.Language
+	}
+	result := language.ListQueryTemplates(lang)
+	return textResult(formatJSON(result)), nil, nil
+}
+
+func (s *MCPServer) handleGetSymbols(ctx context.Context, req *mcp.CallToolRequest, args getSymbolsArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	symbols, err := tools.ExtractSymbols(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache, args.SymbolTypes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("symbol extraction error: %w", err)
+	}
+	return textResult(formatJSON(symbols)), nil, nil
+}
+
+func (s *MCPServer) handleAnalyzeProject(ctx context.Context, req *mcp.CallToolRequest, args analyzeProjectArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	scanDepth := 3
+	if args.ScanDepth != nil {
+		scanDepth = *args.ScanDepth
+	}
+
+	cfg := s.container.GetConfig()
+	analysis, err := tools.AnalyzeProjectStructure(project, s.container.LanguageRegistry, scanDepth, cfg.Security.ExcludedDirs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("analysis error: %w", err)
+	}
+	return textResult(formatJSON(analysis)), nil, nil
+}
+
+func (s *MCPServer) handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, args filePathArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	deps, err := tools.FindDependencies(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dependency analysis error: %w", err)
+	}
+	return textResult(formatJSON(deps)), nil, nil
+}
+
+func (s *MCPServer) handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, args filePathArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	info, err := tools.AnalyzeComplexity(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache)
+	if err != nil {
+		return nil, nil, fmt.Errorf("complexity analysis error: %w", err)
+	}
+	return textResult(formatJSON(info)), nil, nil
+}
+
+func (s *MCPServer) handleFindUsage(ctx context.Context, req *mcp.CallToolRequest, args findUsageArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	lang := ""
+	if args.Language != nil {
+		lang = *args.Language
+	}
+	filePath := ""
+	if args.FilePath != nil {
+		filePath = *args.FilePath
+	}
+
+	if lang == "" && filePath != "" {
+		lang = s.container.LanguageRegistry.LanguageForFile(filePath)
+	}
+	if lang == "" {
+		return nil, nil, fmt.Errorf("either language or file_path must be provided")
+	}
+
+	query := fmt.Sprintf(`((identifier) @reference (#eq? @reference %s))`, strconv.Quote(args.Symbol))
+	results, err := tools.RunQuery(project, query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, 100, "", false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("usage search error: %w", err)
+	}
+	return textResult(formatJSON(results)), nil, nil
+}
+
+func (s *MCPServer) handleBuildQuery(ctx context.Context, req *mcp.CallToolRequest, args buildQueryArgs) (*mcp.CallToolResult, any, error) {
+	combine := "or"
+	if args.Combine != nil {
+		combine = *args.Combine
+	}
+
+	result, err := tools.BuildQuery(args.Language, args.Patterns, combine)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build_query error: %w", err)
+	}
+	return textResult(formatJSON(result)), nil, nil
+}
+
+func (s *MCPServer) handleAdaptQuery(ctx context.Context, req *mcp.CallToolRequest, args adaptQueryArgs) (*mcp.CallToolResult, any, error) {
+	result, err := tools.AdaptQuery(args.Query, args.FromLang, args.ToLang)
+	if err != nil {
+		return nil, nil, fmt.Errorf("adapt_query error: %w", err)
+	}
+	return textResult(formatJSON(result)), nil, nil
+}
+
+func (s *MCPServer) handleGetNodeTypes(ctx context.Context, req *mcp.CallToolRequest, args getNodeTypesArgs) (*mcp.CallToolResult, any, error) {
+	if args.Language != nil && *args.Language != "" {
+		result, err := tools.GetNodeTypes(*args.Language)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get_node_types error: %w", err)
+		}
+		return textResult(formatJSON(result)), nil, nil
+	}
+	// List all available languages.
+	result := tools.ListAllNodeTypes()
+	return textResult(formatJSON(result)), nil, nil
+}
+
+func (s *MCPServer) handleFindSimilarCode(ctx context.Context, req *mcp.CallToolRequest, args findSimilarCodeArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	maxResults := 10
+	if args.MaxResults != nil {
+		maxResults = *args.MaxResults
+	}
+	minSimilarity := 0.5
+	if args.MinSimilarity != nil {
+		minSimilarity = *args.MinSimilarity
+	}
+
+	results, err := tools.FindSimilarCode(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache, maxResults, minSimilarity)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find_similar_code error: %w", err)
+	}
+	return textResult(formatJSON(results)), nil, nil
+}
+
+func (s *MCPServer) handleDiagnoseConfig(ctx context.Context, req *mcp.CallToolRequest, args diagnoseConfigArgs) (*mcp.CallToolResult, any, error) {
+	result := tools.DiagnoseYamlConfig(args.ConfigPath, s.container.ConfigManager)
+	return textResult(formatJSON(result)), nil, nil
+}
+
+func (s *MCPServer) handleClearCache(ctx context.Context, req *mcp.CallToolRequest, args clearCacheArgs) (*mcp.CallToolResult, any, error) {
+	projName := ""
+	if args.Project != nil {
+		projName = *args.Project
+	}
+	filePath := ""
+	if args.FilePath != nil {
+		filePath = *args.FilePath
+	}
+
+	if projName != "" && filePath != "" {
+		project, err := s.container.ProjectRegistry.GetProject(projName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("project error: %w", err)
+		}
+		absPath, err := project.ResolveFilePath(filePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.container.TreeCache.Invalidate(absPath)
+		return textResult(fmt.Sprintf(`{"status":"success","message":"Cache cleared for %s in %s"}`, filePath, projName)), nil, nil
+	}
+
+	s.container.TreeCache.Invalidate()
+	return textResult(`{"status":"success","message":"All caches cleared"}`), nil, nil
+}
+
+// --- Prompts ---
+
+func (s *MCPServer) registerPrompts() {
+	// code_review prompt
+	s.srv.AddPrompt(&mcp.Prompt{
+		Name:        "code_review",
+		Description: "Generate a code review prompt for a file, including structural information.",
+		Arguments: []*mcp.PromptArgument{
+			{Name: "project", Description: "Project name", Required: true},
+			{Name: "file_path", Description: "Path to the file to review", Required: true},
+		},
+	}, s.handleCodeReviewPrompt)
+
+	// explain_code prompt
+	s.srv.AddPrompt(&mcp.Prompt{
+		Name:        "explain_code",
+		Description: "Generate a prompt to explain a code file's functionality and structure.",
+		Arguments: []*mcp.PromptArgument{
+			{Name: "project", Description: "Project name", Required: true},
+			{Name: "file_path", Description: "Path to the file to explain", Required: true},
+			{Name: "focus", Description: "Optional aspect to focus the explanation on", Required: false},
+		},
+	}, s.handleExplainCodePrompt)
+
+	// explain_tree_sitter_query prompt
+	s.srv.AddPrompt(&mcp.Prompt{
+		Name:        "explain_tree_sitter_query",
+		Description: "Generate a prompt explaining tree-sitter query syntax with examples.",
+	}, s.handleExplainQueryPrompt)
+
+	// suggest_improvements prompt
+	s.srv.AddPrompt(&mcp.Prompt{
+		Name:        "suggest_improvements",
+		Description: "Generate a prompt suggesting code improvements based on complexity metrics.",
+		Arguments: []*mcp.PromptArgument{
+			{Name: "project", Description: "Project name", Required: true},
+			{Name: "file_path", Description: "Path to the file to analyze", Required: true},
+		},
+	}, s.handleSuggestImprovementsPrompt)
+
+	// project_overview prompt
+	s.srv.AddPrompt(&mcp.Prompt{
+		Name:        "project_overview",
+		Description: "Generate a prompt for analyzing and summarizing a project's structure.",
+		Arguments: []*mcp.PromptArgument{
+			{Name: "project", Description: "Project name", Required: true},
+		},
+	}, s.handleProjectOverviewPrompt)
+}
+
+func (s *MCPServer) handleCodeReviewPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	projectName := req.Params.Arguments["project"]
+	filePath := req.Params.Arguments["file_path"]
+
+	project, err := s.container.ProjectRegistry.GetProject(projectName)
+	if err != nil {
+		return nil, fmt.Errorf("project error: %w", err)
+	}
+
+	content, err := tools.GetFileContent(project, filePath, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("file read error: %w", err)
+	}
+
+	lang := s.container.LanguageRegistry.LanguageForFile(filePath)
+
+	// Get structure info.
+	structure := ""
+	symbols, symErr := tools.ExtractSymbols(project, filePath, s.container.LanguageRegistry, s.container.TreeCache, nil)
+	if symErr == nil {
+		if funcs, ok := symbols["functions"]; ok && len(funcs) > 0 {
+			structure += "\nFunctions:\n"
+			for _, f := range funcs {
+				structure += fmt.Sprintf("- %s\n", f.Name)
+			}
+		}
+		if classes, ok := symbols["classes"]; ok && len(classes) > 0 {
+			structure += "\nClasses:\n"
+			for _, c := range classes {
+				structure += fmt.Sprintf("- %s\n", c.Name)
+			}
+		}
+	}
+
+	promptText := fmt.Sprintf(`Please review this %s code file:
+
+`+"```"+`%s
+%s
+`+"```"+`
+
+%s
+
+Focus on:
+1. Code clarity and organization
+2. Potential bugs or issues
+3. Performance considerations
+4. Best practices for %s`, lang, lang, content, structure, lang)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Code review for %s", filePath),
+		Messages: []*mcp.PromptMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: promptText}},
+		},
+	}, nil
+}
+
+func (s *MCPServer) handleExplainCodePrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	projectName := req.Params.Arguments["project"]
+	filePath := req.Params.Arguments["file_path"]
+	focus := req.Params.Arguments["focus"]
+
+	project, err := s.container.ProjectRegistry.GetProject(projectName)
+	if err != nil {
+		return nil, fmt.Errorf("project error: %w", err)
+	}
+
+	content, err := tools.GetFileContent(project, filePath, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("file read error: %w", err)
+	}
+
+	lang := s.container.LanguageRegistry.LanguageForFile(filePath)
+
+	focusPrompt := ""
+	if focus != "" {
+		focusPrompt = fmt.Sprintf("\nPlease focus specifically on explaining: %s", focus)
+	}
+
+	promptText := fmt.Sprintf(`Please explain this %s code file:
+
+`+"```"+`%s
+%s
+`+"```"+`
+
+Provide a clear explanation of:
+1. What this code does
+2. How it's structured
+3. Any important patterns or techniques used
+%s`, lang, lang, content, focusPrompt)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Explanation for %s", filePath),
+		Messages: []*mcp.PromptMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: promptText}},
+		},
+	}, nil
+}
+
+func (s *MCPServer) handleExplainQueryPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	promptText := `Tree-sitter queries use S-expression syntax to match patterns in code.
+
+Basic query syntax:
+- (node_type) - Match nodes of a specific type
+- (node_type field: (child_type)) - Match nodes with specific field relationships
+- @name - Capture a node with a name
+- #predicate - Apply additional constraints
+
+Example query for Python functions:
+` + "```" + `
+(function_definition
+  name: (identifier) @function.name
+  parameters: (parameters) @function.params
+  body: (block) @function.body) @function.def
+` + "```" + `
+
+Please write a tree-sitter query to find:`
+
+	return &mcp.GetPromptResult{
+		Description: "Tree-sitter query syntax explanation",
+		Messages: []*mcp.PromptMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: promptText}},
+		},
+	}, nil
+}
+
+func (s *MCPServer) handleSuggestImprovementsPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	projectName := req.Params.Arguments["project"]
+	filePath := req.Params.Arguments["file_path"]
+
+	project, err := s.container.ProjectRegistry.GetProject(projectName)
+	if err != nil {
+		return nil, fmt.Errorf("project error: %w", err)
+	}
+
+	content, err := tools.GetFileContent(project, filePath, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("file read error: %w", err)
+	}
+
+	lang := s.container.LanguageRegistry.LanguageForFile(filePath)
+
+	complexityInfo := ""
+	info, compErr := tools.AnalyzeComplexity(project, filePath, s.container.LanguageRegistry, s.container.TreeCache)
+	if compErr == nil {
+		complexityInfo = fmt.Sprintf(`
+Code metrics:
+- Line count: %d
+- Functions: %d
+- Avg. function length: %d lines
+`, info.TotalLines, info.FunctionCount, info.AvgLength)
+	}
+
+	promptText := fmt.Sprintf(`Please suggest improvements for this %s code:
+
+`+"```"+`%s
+%s
+`+"```"+`
+
+%s
+Suggest specific, actionable improvements for:
+1. Code quality and readability
+2. Performance optimization
+3. Error handling and robustness
+4. Following %s best practices
+
+Where possible, provide code examples of your suggestions.`, lang, lang, content, complexityInfo, lang)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Improvement suggestions for %s", filePath),
+		Messages: []*mcp.PromptMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: promptText}},
+		},
+	}, nil
+}
+
+func (s *MCPServer) handleProjectOverviewPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	projectName := req.Params.Arguments["project"]
+
+	project, err := s.container.ProjectRegistry.GetProject(projectName)
+	if err != nil {
+		return nil, fmt.Errorf("project error: %w", err)
+	}
+
+	cfg := s.container.GetConfig()
+	analysis, err := tools.AnalyzeProjectStructure(project, s.container.LanguageRegistry, 3, cfg.Security.ExcludedDirs)
+	if err != nil {
+		return nil, fmt.Errorf("analysis error: %w", err)
+	}
+
+	languagesStr := ""
+	for lang, count := range analysis.Languages {
+		languagesStr += fmt.Sprintf("- %s: %d files\n", lang, count)
+	}
+
+	topFilesStr := ""
+	for _, f := range analysis.TopFiles {
+		topFilesStr += fmt.Sprintf("- %s\n", f)
+	}
+	if topFilesStr == "" {
+		topFilesStr = "None detected"
+	}
+
+	promptText := fmt.Sprintf(`Please analyze this codebase:
+
+Project name: %s
+Path: %s
+
+Languages:
+%s
+
+Top-level files:
+%s
+
+Please provide:
+1. An overview of the project structure
+2. The likely purpose and architecture
+3. Key entry points and build configuration
+4. Any notable patterns or conventions`, project.Name, project.RootPath, languagesStr, topFilesStr)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Project overview for %s", projectName),
+		Messages: []*mcp.PromptMessage{
+			{Role: "user", Content: &mcp.TextContent{Text: promptText}},
+		},
+	}, nil
+}
+
+// --- Helpers ---
+
+func textResult(text string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: text},
+		},
+	}
+}
+
+func formatJSON(v any) string {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+	}
+	return string(data)
+}

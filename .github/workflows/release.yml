@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # Build linux (amd64/arm64) and windows (amd64) on ubuntu with cross-compilers.
+  build-linux-windows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install cross-compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
+
+      - name: Run GoReleaser (linux + windows)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --config .goreleaser-linux-windows.yaml --skip=publish,announce,validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: dist-linux-windows
+          path: dist/
+
+  # Build darwin (amd64/arm64) natively on macOS.
+  build-darwin:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run GoReleaser (darwin)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --config .goreleaser-darwin.yaml --skip=publish,announce,validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: dist-darwin
+          path: dist/
+
+  # Merge all dist artifacts and create the GitHub release.
+  release:
+    needs:
+      - build-linux-windows
+      - build-darwin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: dist-*
+          path: dist-merged
+          merge-multiple: true
+
+      - name: Compute checksums
+        run: |
+          cd dist-merged
+          sha256sum *.tar.gz *.zip > checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-merged/*
+          fail_on_unmatched_files: false
+          generate_release_notes: true

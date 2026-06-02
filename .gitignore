@@ -1,0 +1,4 @@
+bin/
+llvm/
+dist/
+.env

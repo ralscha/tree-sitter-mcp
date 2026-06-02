@@ -1,0 +1,33 @@
+version: 2
+
+project_name: tree-sitter-mcp
+
+builds:
+  - id: darwin-amd64
+    main: .
+    binary: tree-sitter-mcp
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+
+  - id: darwin-arm64
+    main: .
+    binary: tree-sitter-mcp
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - arm64
+
+archives:
+  - id: binaries
+    ids:
+      - darwin-amd64
+      - darwin-arm64
+    formats:
+      - tar.gz
+    name_template: '{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'

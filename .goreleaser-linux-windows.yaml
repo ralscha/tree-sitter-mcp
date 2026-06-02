@@ -1,0 +1,50 @@
+version: 2
+
+project_name: tree-sitter-mcp
+
+builds:
+  - id: linux-amd64
+    main: .
+    binary: tree-sitter-mcp
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+  - id: linux-arm64
+    main: .
+    binary: tree-sitter-mcp
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos:
+      - linux
+    goarch:
+      - arm64
+
+  - id: windows-amd64
+    main: .
+    binary: tree-sitter-mcp
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-w64-mingw32-gcc
+    goos:
+      - windows
+    goarch:
+      - amd64
+
+archives:
+  - id: binaries
+    ids:
+      - linux-amd64
+      - linux-arm64
+      - windows-amd64
+    formats:
+      - tar.gz
+    name_template: '{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
