@@ -12,6 +12,9 @@
 //	--debug               Enable debug logging
 //	--disable-cache       Disable parse tree caching
 //	--pre-parse string    Pre-parse all source files in a directory at startup
+//	--transport string    MCP transport: stdio or sse
+//	--http-addr string    HTTP listen address when using SSE
+//	--sse-path string     SSE endpoint path when using SSE
 //	--version             Show version and exit
 package main
 
@@ -20,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"tree-sitter-mcp/internal/config"
 	"tree-sitter-mcp/internal/server"
@@ -33,6 +37,9 @@ func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	disableCache := flag.Bool("disable-cache", false, "Disable parse tree caching")
 	preParsePath := flag.String("pre-parse", "", "Pre-parse all source files in the given directory at startup")
+	transport := flag.String("transport", envDefault("MCP_TS_TRANSPORT", "stdio"), "MCP transport: stdio or sse")
+	httpAddr := flag.String("http-addr", envDefault("MCP_TS_HTTP_ADDR", ":8080"), "HTTP listen address when using SSE")
+	ssePath := flag.String("sse-path", envDefault("MCP_TS_SSE_PATH", "/sse"), "SSE endpoint path when using SSE")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -99,14 +106,25 @@ func main() {
 
 	// Log startup configuration.
 	cfg := cfgMgr.GetConfig()
-	log.Printf("Starting tree-sitter MCP server (cache: %v, max_file_size: %dMB, max_depth: %d)\n",
-		cfg.Cache.Enabled, cfg.Security.MaxFileSizeMB, cfg.Language.DefaultMaxDepth)
+	runOpts := server.RunOptions{
+		Transport: server.Transport(strings.ToLower(strings.TrimSpace(*transport))),
+		HTTPAddr:  strings.TrimSpace(*httpAddr),
+		SSEPath:   strings.TrimSpace(*ssePath),
+	}
+	log.Printf("Starting tree-sitter MCP server (cache: %v, max_file_size: %dMB, max_depth: %d, transport: %s)\n",
+		cfg.Cache.Enabled, cfg.Security.MaxFileSizeMB, cfg.Language.DefaultMaxDepth, runOpts.Transport)
 
-	// Run the server over stdio.
-	if err := srv.Run(); err != nil {
+	if err := srv.RunWithOptions(runOpts); err != nil {
 		log.Fatalf("Server error: %v\n", err)
 	}
 }
 
 // Ensure config is used.
 var _ = config.DefaultConfig
+
+func envDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}

@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,6 +17,19 @@ import (
 	"tree-sitter-mcp/internal/models"
 	"tree-sitter-mcp/internal/tools"
 )
+
+type Transport string
+
+const (
+	StdioTransport Transport = "stdio"
+	SSETransport   Transport = "sse"
+)
+
+type RunOptions struct {
+	Transport Transport
+	HTTPAddr  string
+	SSEPath   string
+}
 
 // MCPServer wraps the MCP server and its dependencies.
 type MCPServer struct {
@@ -43,7 +59,39 @@ func NewMCPServer() *MCPServer {
 
 // Run starts the MCP server on stdio.
 func (s *MCPServer) Run() error {
-	return s.srv.Run(context.Background(), &mcp.StdioTransport{})
+	return s.RunWithOptions(RunOptions{Transport: StdioTransport})
+}
+
+// RunWithOptions starts the MCP server with the requested transport.
+func (s *MCPServer) RunWithOptions(opts RunOptions) error {
+	transport := opts.Transport
+	if transport == "" {
+		transport = StdioTransport
+	}
+	if opts.HTTPAddr == "" {
+		opts.HTTPAddr = ":8080"
+	}
+	if opts.SSEPath == "" {
+		opts.SSEPath = "/sse"
+	}
+	if !strings.HasPrefix(opts.SSEPath, "/") {
+		return fmt.Errorf("SSE path must start with /")
+	}
+
+	switch transport {
+	case StdioTransport:
+		return s.srv.Run(context.Background(), &mcp.StdioTransport{})
+	case SSETransport:
+		handler := mcp.NewSSEHandler(func(*http.Request) *mcp.Server {
+			return s.srv
+		}, nil)
+		mux := http.NewServeMux()
+		mux.Handle(opts.SSEPath, handler)
+		log.Printf("tree-sitter-mcp listening for SSE at http://%s%s", opts.HTTPAddr, opts.SSEPath)
+		return http.ListenAndServe(opts.HTTPAddr, mux)
+	default:
+		return fmt.Errorf("unsupported transport %q, expected stdio or sse", transport)
+	}
 }
 
 // GetContainer returns the dependency container for external configuration.

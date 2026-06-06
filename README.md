@@ -40,12 +40,15 @@ Flags:
   --debug               Enable debug logging
   --disable-cache       Disable parse tree caching
   --pre-parse string    Pre-parse all source files in a directory at startup
+  --transport string    MCP transport: stdio or sse (default "stdio")
+  --http-addr string    HTTP listen address when using SSE (default ":8080")
+  --sse-path string     SSE endpoint path when using SSE (default "/sse")
   --version             Show version and exit
 ```
 
 ### Running as an MCP Server
 
-The server communicates over stdio. Configure your MCP client to launch it:
+By default, the server communicates over stdio. Configure your MCP client to launch it:
 
 ```json
 {
@@ -57,6 +60,20 @@ The server communicates over stdio. Configure your MCP client to launch it:
   }
 }
 ```
+
+To serve MCP over SSE instead, run the server as an HTTP process:
+
+```sh
+tree-sitter-mcp --transport sse --http-addr :8080 --sse-path /sse
+```
+
+Then configure an SSE-capable MCP client to connect to:
+
+```text
+http://localhost:8080/sse
+```
+
+The same settings can be provided with `MCP_TS_TRANSPORT`, `MCP_TS_HTTP_ADDR`, and `MCP_TS_SSE_PATH`.
 
 ### Pre-parsing a Project
 
@@ -111,6 +128,9 @@ Environment variable overrides currently supported:
 
 - `MCP_TS_LOG_LEVEL`
 - `MCP_TS_CACHE_MAX_SIZE_MB`
+- `MCP_TS_TRANSPORT`
+- `MCP_TS_HTTP_ADDR`
+- `MCP_TS_SSE_PATH`
 
 ## MCP Tools
 

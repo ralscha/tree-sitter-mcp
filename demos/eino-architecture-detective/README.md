@@ -1,6 +1,6 @@
 # Eino Architecture Detective
 
-This demo uses Eino to connect to the `tree-sitter-mcp` server over stdio, gathers structural facts about a codebase with MCP tools, and asks an OpenAI-compatible chat model to write an evidence-backed architecture tour.
+This demo uses Eino to connect to the `tree-sitter-mcp` server over stdio by default, gathers structural facts about a codebase with MCP tools, and asks an OpenAI-compatible chat model to write an evidence-backed architecture tour.
 
 It is intentionally a little more interesting than a tool-listing sample: it registers a project, analyzes language mix, pulls files, extracts symbols, checks dependencies and complexity, runs a tree-sitter query, and asks the model to identify likely entry points, coupling patterns, and refactor targets from those facts.
 
@@ -50,4 +50,18 @@ You can also run the demo module directly:
 ```sh
 cd demos/eino-architecture-detective
 TREE_SITTER_MCP_BIN=../../bin/tree-sitter-mcp go run . --env ../../.env ../..
+```
+
+## SSE Transport
+
+To use SSE, start the MCP server separately from the repository root:
+
+```bash
+MCP_TS_TRANSPORT=sse MCP_TS_HTTP_ADDR=:8080 MCP_TS_SSE_PATH=/sse go run .
+```
+
+Then run the demo with:
+
+```bash
+MCP_TS_TRANSPORT=sse MCP_TS_SSE_URL=http://localhost:8080/sse go run . --env ../../.env ../..
 ```
