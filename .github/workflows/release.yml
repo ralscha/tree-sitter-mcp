@@ -9,10 +9,12 @@ permissions:
   contents: write
 
 jobs:
-  # Build linux (amd64/arm64) and windows (amd64) on ubuntu with cross-compilers.
+  # Build linux (amd64/arm64) and windows (amd64/arm64) on ubuntu with cross-compilers.
   build-linux-windows:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      LLVM_MINGW_VERSION: "20260602"
 
     steps:
       - name: Check out repository
@@ -29,6 +31,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz" -o /tmp/llvm-mingw.tar.xz
+          sudo mkdir -p /opt/llvm-mingw
+          sudo tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
 
       - name: Run GoReleaser (linux + windows)
         uses: goreleaser/goreleaser-action@v7

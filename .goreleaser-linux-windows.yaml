@@ -35,12 +35,25 @@ builds:
     goarch:
       - amd64
 
+  - id: windows-arm64
+    main: .
+    binary: tree-sitter-mcp
+    env:
+      - CGO_ENABLED=1
+      - CC=/opt/llvm-mingw/bin/aarch64-w64-mingw32-clang
+      - CXX=/opt/llvm-mingw/bin/aarch64-w64-mingw32-clang++
+    goos:
+      - windows
+    goarch:
+      - arm64
+
 archives:
   - id: binaries
     ids:
       - linux-amd64
       - linux-arm64
       - windows-amd64
+      - windows-arm64
     formats:
       - tar.gz
     name_template: '{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
