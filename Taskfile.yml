@@ -1,7 +1,6 @@
 version: '3'
 
 vars:
-  MINGW_PATH: '{{joinPath .TASKFILE_DIR "llvm" "bin"}}'
   BINARY: 'bin/tree-sitter-mcp{{exeExt}}'
 
 tasks:
@@ -12,11 +11,9 @@ tasks:
       - task --list
 
   build:
-    desc: Build using the LLVM MinGW clang toolchain
+    desc: Build the MCP server
     env:
       CGO_ENABLED: "1"
-      CC: "{{.MINGW_PATH}}\\gcc.exe"
-      CXX: "{{.MINGW_PATH}}\\g++.exe"    
     cmds:
       - go build -o {{.BINARY}} .
 
@@ -48,11 +45,9 @@ tasks:
       - '{{.BINARY}} --debug --pre-parse {{default "." .PREPARSE_PATH}}'
 
   test:
-    desc: Run tests with LLVM MinGW clang toolchain
+    desc: Run tests
     env:
       CGO_ENABLED: "1"
-      CC: "{{.MINGW_PATH}}\\gcc.exe"
-      CXX: "{{.MINGW_PATH}}\\g++.exe"    
     cmds:
       - go test ./...
 

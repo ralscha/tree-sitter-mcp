@@ -26,7 +26,7 @@ Build from source with Go and Task:
 task build
 ```
 
-The binary is written to `bin/tree-sitter-mcp` or `bin/tree-sitter-mcp.exe` on Windows. Note that the build requires CGO to compile the bundled tree-sitter parsers, so ensure you have a C compiler installed and configured.
+The binary is written to `bin/tree-sitter-mcp` or `bin/tree-sitter-mcp.exe` on Windows. The build requires CGO to compile the bundled tree-sitter parsers, so ensure you have a C compiler available on `PATH` or set `CC`/`CXX` before running build and test commands.
 
 ## Usage
 
