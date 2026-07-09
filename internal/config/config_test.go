@@ -135,6 +135,85 @@ func TestConfigurationManagerToMap(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeDefaults(t *testing.T) {
+	clearRuntimeEnv(t)
+
+	cfg, err := LoadRuntime(nil)
+	if err != nil {
+		t.Fatalf("LoadRuntime failed: %v", err)
+	}
+
+	if cfg.Transport != TransportStdio {
+		t.Errorf("transport = %s, want %s", cfg.Transport, TransportStdio)
+	}
+	if cfg.HTTPAddr != ":8080" {
+		t.Errorf("http_addr = %s, want :8080", cfg.HTTPAddr)
+	}
+}
+
+func TestLoadRuntimeEnv(t *testing.T) {
+	clearRuntimeEnv(t)
+	t.Setenv("MCP_TRANSPORT", "http")
+	t.Setenv("MCP_HTTP_ADDR", ":9090")
+
+	cfg, err := LoadRuntime(nil)
+	if err != nil {
+		t.Fatalf("LoadRuntime failed: %v", err)
+	}
+
+	if cfg.Transport != TransportHTTP {
+		t.Errorf("transport = %s, want %s", cfg.Transport, TransportHTTP)
+	}
+	if cfg.HTTPAddr != ":9090" {
+		t.Errorf("http_addr = %s, want :9090", cfg.HTTPAddr)
+	}
+}
+
+func TestLoadRuntimeFlagOverride(t *testing.T) {
+	clearRuntimeEnv(t)
+	t.Setenv("MCP_TRANSPORT", "stdio")
+	t.Setenv("MCP_HTTP_ADDR", ":8080")
+
+	cfg, err := LoadRuntime([]string{
+		"--config=config.yaml",
+		"--debug",
+		"--disable-cache",
+		"--pre-parse=.",
+		"--transport=http",
+		"--http-addr=:6060",
+	})
+	if err != nil {
+		t.Fatalf("LoadRuntime failed: %v", err)
+	}
+
+	if cfg.ConfigPath != "config.yaml" {
+		t.Errorf("config_path = %s, want config.yaml", cfg.ConfigPath)
+	}
+	if !cfg.Debug {
+		t.Error("debug should be true")
+	}
+	if !cfg.DisableCache {
+		t.Error("disable_cache should be true")
+	}
+	if cfg.PreParsePath != "." {
+		t.Errorf("pre_parse_path = %s, want .", cfg.PreParsePath)
+	}
+	if cfg.Transport != TransportHTTP {
+		t.Errorf("transport = %s, want %s", cfg.Transport, TransportHTTP)
+	}
+	if cfg.HTTPAddr != ":6060" {
+		t.Errorf("http_addr = %s, want :6060", cfg.HTTPAddr)
+	}
+}
+
+func TestLoadRuntimeInvalidTransport(t *testing.T) {
+	clearRuntimeEnv(t)
+
+	if _, err := LoadRuntime([]string{"--transport=sse"}); err == nil {
+		t.Fatal("expected invalid transport error")
+	}
+}
+
 func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -228,7 +307,7 @@ func TestConfigurationManagerLoadFromFile(t *testing.T) {
 }
 
 func TestApplyEnvOverrides(t *testing.T) {
-	t.Setenv("MCP_TS_LOG_LEVEL", "ERROR")
+	t.Setenv("TREE_SITTER_MCP_LOG_LEVEL", "ERROR")
 
 	cfg := DefaultConfig()
 	applyEnvOverrides(cfg)
@@ -236,4 +315,10 @@ func TestApplyEnvOverrides(t *testing.T) {
 	if cfg.LogLevel != "ERROR" {
 		t.Errorf("log_level = %s, want ERROR", cfg.LogLevel)
 	}
+}
+
+func clearRuntimeEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("MCP_TRANSPORT", "")
+	t.Setenv("MCP_HTTP_ADDR", "")
 }

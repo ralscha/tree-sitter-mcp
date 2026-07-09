@@ -84,17 +84,17 @@ func main() {
 func connectMCPTools(ctx context.Context) ([]tool.BaseTool, func(), error) {
 	var cli *client.Client
 	var err error
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MCP_TS_TRANSPORT"))) {
+	switch mcpTransport() {
 	case "", "stdio":
 		command, args := serverCommand()
 		cli, err = client.NewStdioMCPClient(command, os.Environ(), args...)
-	case "sse":
-		cli, err = client.NewSSEMCPClient(sseEndpoint())
+	case "http":
+		cli, err = client.NewStreamableHttpClient(httpEndpoint())
 		if err == nil {
 			err = cli.Start(ctx)
 		}
 	default:
-		err = fmt.Errorf("unsupported MCP_TS_TRANSPORT %q, expected stdio or sse", os.Getenv("MCP_TS_TRANSPORT"))
+		err = fmt.Errorf("unsupported MCP transport %q, expected stdio or http", mcpTransport())
 	}
 	if err != nil {
 		return nil, nil, err
@@ -126,37 +126,37 @@ func connectMCPTools(ctx context.Context) ([]tool.BaseTool, func(), error) {
 }
 
 func printMCPConnection(target string) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MCP_TS_TRANSPORT"))) {
-	case "sse":
-		fmt.Printf("Connecting to tree-sitter MCP server over SSE at %q and inspecting %s\n\n", sseEndpoint(), target)
+	switch mcpTransport() {
+	case "http":
+		fmt.Printf("Connecting to tree-sitter MCP server over streamable HTTP at %q and inspecting %s\n\n", httpEndpoint(), target)
 	default:
 		fmt.Printf("Connecting to tree-sitter MCP server over stdio and inspecting %s\n\n", target)
 	}
 }
 
-func sseEndpoint() string {
-	if endpoint := strings.TrimSpace(os.Getenv("MCP_TS_SSE_URL")); endpoint != "" {
+func mcpTransport() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("MCP_TRANSPORT")))
+}
+
+func httpEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("MCP_HTTP_URL")); endpoint != "" {
 		return endpoint
 	}
-	addr := strings.TrimSpace(os.Getenv("MCP_TS_HTTP_ADDR"))
+	addr := strings.TrimSpace(os.Getenv("MCP_HTTP_ADDR"))
 	if addr == "" {
 		addr = ":8080"
 	}
-	path := strings.TrimSpace(os.Getenv("MCP_TS_SSE_PATH"))
-	if path == "" {
-		path = "/sse"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return strings.TrimRight(addr, "/")
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "http://" + strings.TrimRight(addr, "/") + path
+		return "http://" + strings.TrimRight(addr, "/")
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
 		host = "localhost"
 	}
-	return "http://" + net.JoinHostPort(host, port) + path
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func serverCommand() (string, []string) {

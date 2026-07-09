@@ -105,7 +105,7 @@ func PreParseProject(
 		_, _, parseErr := ParseFile(path, lang, langReg, treeCache)
 		if parseErr != nil {
 			result.Errors++
-			if os.Getenv("MCP_TS_LOG_LEVEL") == "DEBUG" {
+			if strings.EqualFold(os.Getenv("TREE_SITTER_MCP_LOG_LEVEL"), "DEBUG") {
 				log.Printf("pre-parse error %s: %v\n", path, parseErr)
 			}
 			return nil

@@ -5,6 +5,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 ## Features
 
 - **20+ MCP tools** covering file ops, AST inspection, symbol extraction, text/regex search, tree-sitter queries, complexity analysis, and more
+- **stdio and streamable HTTP transports** using the same MCP transport shape as the companion MCP servers
 - **Bundled parsers** for C, C++, Go, HTML, Java, JavaScript, JSON, PHP, Python, Ruby, and Rust
 - **Extension detection** for additional file types in project summaries and file filtering
 - **Project registry** to register multiple project directories and scope operations to each
@@ -40,9 +41,8 @@ Flags:
   --debug               Enable debug logging
   --disable-cache       Disable parse tree caching
   --pre-parse string    Pre-parse all source files in a directory at startup
-  --transport string    MCP transport: stdio or sse (default "stdio")
-  --http-addr string    HTTP listen address when using SSE (default ":8080")
-  --sse-path string     SSE endpoint path when using SSE (default "/sse")
+  --transport string    MCP transport: stdio or http (default "stdio")
+  --http-addr string    HTTP listen address when using --transport=http (default ":8080")
   --version             Show version and exit
 ```
 
@@ -61,19 +61,19 @@ By default, the server communicates over stdio. Configure your MCP client to lau
 }
 ```
 
-To serve MCP over SSE instead, run the server as an HTTP process:
+To serve MCP over streamable HTTP instead, run the server as an HTTP process:
 
 ```sh
-tree-sitter-mcp --transport sse --http-addr :8080 --sse-path /sse
+tree-sitter-mcp --transport=http --http-addr=:8080
 ```
 
-Then configure an SSE-capable MCP client to connect to:
+Then configure a streamable HTTP-capable MCP client to connect to:
 
 ```text
-http://localhost:8080/sse
+http://localhost:8080
 ```
 
-The same settings can be provided with `MCP_TS_TRANSPORT`, `MCP_TS_HTTP_ADDR`, and `MCP_TS_SSE_PATH`.
+The same settings can be provided with `MCP_TRANSPORT` and `MCP_HTTP_ADDR`.
 
 ### Pre-parsing a Project
 
@@ -124,13 +124,14 @@ log_level: INFO
 max_results_default: 100
 ```
 
+Flags override environment variables.
+
 Environment variable overrides currently supported:
 
-- `MCP_TS_LOG_LEVEL`
-- `MCP_TS_CACHE_MAX_SIZE_MB`
-- `MCP_TS_TRANSPORT`
-- `MCP_TS_HTTP_ADDR`
-- `MCP_TS_SSE_PATH`
+- `TREE_SITTER_MCP_LOG_LEVEL`
+- `TREE_SITTER_MCP_CACHE_MAX_SIZE_MB`
+- `MCP_TRANSPORT` (`stdio` or `http`)
+- `MCP_HTTP_ADDR`
 
 ## MCP Tools
 

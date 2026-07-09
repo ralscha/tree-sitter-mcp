@@ -28,6 +28,8 @@ Optional model settings:
 Optional server setting:
 
 - `TREE_SITTER_MCP_BIN=bin/tree-sitter-mcp.exe`
+- `MCP_TRANSPORT=http`
+- `MCP_HTTP_URL=http://localhost:8080`
 
 The easiest path is to use the root `Taskfile.yml`, which builds the MCP server and points the demo at that binary.
 
@@ -52,16 +54,16 @@ cd demos/eino-architecture-detective
 TREE_SITTER_MCP_BIN=../../bin/tree-sitter-mcp go run . --env ../../.env ../..
 ```
 
-## SSE Transport
+## HTTP Transport
 
-To use SSE, start the MCP server separately from the repository root:
+To use streamable HTTP, start the MCP server separately from the repository root:
 
 ```bash
-MCP_TS_TRANSPORT=sse MCP_TS_HTTP_ADDR=:8080 MCP_TS_SSE_PATH=/sse go run .
+MCP_TRANSPORT=http MCP_HTTP_ADDR=:8080 go run .
 ```
 
 Then run the demo with:
 
 ```bash
-MCP_TS_TRANSPORT=sse MCP_TS_SSE_URL=http://localhost:8080/sse go run . --env ../../.env ../..
+MCP_TRANSPORT=http MCP_HTTP_URL=http://localhost:8080 go run . --env ../../.env ../..
 ```

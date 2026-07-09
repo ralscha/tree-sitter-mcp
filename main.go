@@ -12,18 +12,18 @@
 //	--debug               Enable debug logging
 //	--disable-cache       Disable parse tree caching
 //	--pre-parse string    Pre-parse all source files in a directory at startup
-//	--transport string    MCP transport: stdio or sse
-//	--http-addr string    HTTP listen address when using SSE
-//	--sse-path string     SSE endpoint path when using SSE
+//	--transport string    MCP transport: stdio or http
+//	--http-addr string    HTTP listen address when using HTTP
 //	--version             Show version and exit
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"log"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
 
 	"tree-sitter-mcp/internal/config"
 	"tree-sitter-mcp/internal/server"
@@ -33,23 +33,24 @@ import (
 const version = "0.1.0"
 
 func main() {
-	configPath := flag.String("config", "", "Path to YAML configuration file")
-	debug := flag.Bool("debug", false, "Enable debug logging")
-	disableCache := flag.Bool("disable-cache", false, "Disable parse tree caching")
-	preParsePath := flag.String("pre-parse", "", "Pre-parse all source files in the given directory at startup")
-	transport := flag.String("transport", envDefault("MCP_TS_TRANSPORT", "stdio"), "MCP transport: stdio or sse")
-	httpAddr := flag.String("http-addr", envDefault("MCP_TS_HTTP_ADDR", ":8080"), "HTTP listen address when using SSE")
-	ssePath := flag.String("sse-path", envDefault("MCP_TS_SSE_PATH", "/sse"), "SSE endpoint path when using SSE")
-	showVersion := flag.Bool("version", false, "Show version and exit")
-	flag.Parse()
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	if *showVersion {
-		fmt.Printf("tree-sitter-mcp version %s\n", version)
-		os.Exit(0)
+func run() error {
+	runtimeCfg, err := config.LoadRuntime(os.Args[1:])
+	if err != nil {
+		return err
 	}
 
-	if *debug {
-		_ = os.Setenv("MCP_TS_LOG_LEVEL", "DEBUG")
+	if runtimeCfg.ShowVersion {
+		fmt.Printf("tree-sitter-mcp version %s\n", version)
+		return nil
+	}
+
+	if runtimeCfg.Debug {
+		_ = os.Setenv("TREE_SITTER_MCP_LOG_LEVEL", "DEBUG")
 		log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 		log.Println("Debug logging enabled")
 	}
@@ -61,45 +62,45 @@ func main() {
 	// Apply command-line configuration overrides.
 	cfgMgr := srv.GetContainer().ConfigManager
 
-	if *configPath != "" {
-		log.Printf("Loading configuration from %s\n", *configPath)
-		if err := cfgMgr.LoadFromFile(*configPath); err != nil {
-			log.Printf("Warning: failed to load config: %v\n", err)
+	if runtimeCfg.ConfigPath != "" {
+		log.Printf("Loading configuration from %q\n", runtimeCfg.ConfigPath)
+		if err := cfgMgr.LoadFromFile(runtimeCfg.ConfigPath); err != nil {
+			log.Printf("Warning: failed to load config: %q\n", err.Error())
 		} else {
 			srv.GetContainer().ApplyConfig()
 		}
 	}
 
-	if *disableCache {
+	if runtimeCfg.DisableCache {
 		log.Println("Disabling parse tree cache")
 		cfgMgr.UpdateValue("cache.enabled", false)
 		srv.GetContainer().TreeCache.SetEnabled(false)
 	}
 
-	if *debug {
+	if runtimeCfg.Debug {
 		cfgMgr.UpdateValue("log_level", "DEBUG")
 		srv.GetContainer().ApplyConfig()
 	}
 
 	// Pre-parse a project directory if requested.
-	if *preParsePath != "" {
+	if runtimeCfg.PreParsePath != "" {
 		container := srv.GetContainer()
 		cfg := container.GetConfig()
-		log.Printf("Pre-parsing project at %s ...\n", *preParsePath)
+		log.Printf("Pre-parsing project at %q ...\n", runtimeCfg.PreParsePath)
 		result, err := tools.PreParseProject(
-			*preParsePath,
+			runtimeCfg.PreParsePath,
 			container.LanguageRegistry,
 			container.TreeCache,
 			cfg.Security.ExcludedDirs,
 		)
 		if err != nil {
-			log.Printf("Pre-parse warning: %v\n", err)
+			log.Printf("Pre-parse warning: %q\n", err.Error())
 		}
 		if result != nil {
 			log.Printf("Pre-parse complete: %d files scanned, %d parsed, %d skipped, %d errors in %.1fs\n",
 				result.TotalFiles, result.Parsed, result.Skipped, result.Errors, result.ElapsedSecs)
 			for lang, count := range result.ByLanguage {
-				log.Printf("  %s: %d files\n", lang, count)
+				log.Printf("  %q: %d files\n", lang, count)
 			}
 		}
 	}
@@ -107,24 +108,18 @@ func main() {
 	// Log startup configuration.
 	cfg := cfgMgr.GetConfig()
 	runOpts := server.RunOptions{
-		Transport: server.Transport(strings.ToLower(strings.TrimSpace(*transport))),
-		HTTPAddr:  strings.TrimSpace(*httpAddr),
-		SSEPath:   strings.TrimSpace(*ssePath),
+		Transport: server.Transport(runtimeCfg.Transport),
+		HTTPAddr:  runtimeCfg.HTTPAddr,
 	}
-	log.Printf("Starting tree-sitter MCP server (cache: %v, max_file_size: %dMB, max_depth: %d, transport: %s)\n",
+	log.Printf("Starting tree-sitter MCP server (cache: %v, max_file_size: %dMB, max_depth: %d, transport: %q)\n",
 		cfg.Cache.Enabled, cfg.Security.MaxFileSizeMB, cfg.Language.DefaultMaxDepth, runOpts.Transport)
 
-	if err := srv.RunWithOptions(runOpts); err != nil {
-		log.Fatalf("Server error: %v\n", err)
-	}
-}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-// Ensure config is used.
-var _ = config.DefaultConfig
-
-func envDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
+	if err := srv.RunWithOptions(ctx, runOpts); err != nil {
+		return fmt.Errorf("server error: %w", err)
 	}
-	return fallback
+
+	return nil
 }

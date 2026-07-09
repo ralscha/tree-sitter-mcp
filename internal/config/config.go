@@ -2,6 +2,8 @@
 package config
 
 import (
+	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +11,25 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// Transport selects how the MCP server communicates with clients.
+type Transport string
+
+const (
+	TransportStdio Transport = "stdio"
+	TransportHTTP  Transport = "http"
+)
+
+// RuntimeConfig holds process-level settings for running the MCP server.
+type RuntimeConfig struct {
+	ConfigPath   string
+	Debug        bool
+	DisableCache bool
+	PreParsePath string
+	Transport    Transport
+	HTTPAddr     string
+	ShowVersion  bool
+}
 
 // CacheConfig holds caching behavior settings.
 type CacheConfig struct {
@@ -59,6 +80,60 @@ func DefaultConfig() *ServerConfig {
 	}
 }
 
+// LoadRuntime builds a RuntimeConfig from environment variables, then applies
+// command-line flag overrides. Flags take precedence over environment variables.
+//
+// Environment variables:
+//   - MCP_TRANSPORT (stdio|http)
+//   - MCP_HTTP_ADDR
+func LoadRuntime(args []string) (*RuntimeConfig, error) {
+	cfg := &RuntimeConfig{
+		Transport: TransportStdio,
+		HTTPAddr:  ":8080",
+	}
+
+	if v := strings.TrimSpace(os.Getenv("MCP_TRANSPORT")); v != "" {
+		cfg.Transport = Transport(strings.ToLower(v))
+	}
+	if v := strings.TrimSpace(os.Getenv("MCP_HTTP_ADDR")); v != "" {
+		cfg.HTTPAddr = v
+	}
+
+	fs := flag.NewFlagSet("tree-sitter-mcp", flag.ContinueOnError)
+	configPath := fs.String("config", cfg.ConfigPath, "Path to YAML configuration file")
+	debug := fs.Bool("debug", cfg.Debug, "Enable debug logging")
+	disableCache := fs.Bool("disable-cache", cfg.DisableCache, "Disable parse tree caching")
+	preParsePath := fs.String("pre-parse", cfg.PreParsePath, "Pre-parse all source files in the given directory at startup")
+	transport := fs.String("transport", string(cfg.Transport), "MCP transport: stdio or http")
+	httpAddr := fs.String("http-addr", cfg.HTTPAddr, "HTTP listen address when using --transport=http")
+	showVersion := fs.Bool("version", cfg.ShowVersion, "Show version and exit")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+
+	cfg.ConfigPath = strings.TrimSpace(*configPath)
+	cfg.Debug = *debug
+	cfg.DisableCache = *disableCache
+	cfg.PreParsePath = strings.TrimSpace(*preParsePath)
+	cfg.Transport = Transport(strings.ToLower(strings.TrimSpace(*transport)))
+	cfg.HTTPAddr = strings.TrimSpace(*httpAddr)
+	cfg.ShowVersion = *showVersion
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+func (c *RuntimeConfig) validate() error {
+	if c.Transport != TransportStdio && c.Transport != TransportHTTP {
+		return fmt.Errorf("transport must be 'stdio' or 'http', got '%s'", c.Transport)
+	}
+	return nil
+}
+
 // LoadFromFile loads configuration from a YAML file, falling back to defaults.
 func LoadFromFile(path string) (*ServerConfig, error) {
 	cfg := DefaultConfig()
@@ -80,12 +155,12 @@ func LoadFromFile(path string) (*ServerConfig, error) {
 	return cfg, nil
 }
 
-// applyEnvOverrides applies MCP_TS_* environment variable overrides.
+// applyEnvOverrides applies environment variable overrides.
 func applyEnvOverrides(cfg *ServerConfig) {
-	if v := os.Getenv("MCP_TS_LOG_LEVEL"); v != "" {
+	if v := strings.TrimSpace(os.Getenv("TREE_SITTER_MCP_LOG_LEVEL")); v != "" {
 		cfg.LogLevel = v
 	}
-	if v := os.Getenv("MCP_TS_CACHE_MAX_SIZE_MB"); v != "" {
+	if v := strings.TrimSpace(os.Getenv("TREE_SITTER_MCP_CACHE_MAX_SIZE_MB")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Cache.MaxSizeMB = n
 		}

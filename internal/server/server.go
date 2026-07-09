@@ -4,11 +4,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -22,13 +23,12 @@ type Transport string
 
 const (
 	StdioTransport Transport = "stdio"
-	SSETransport   Transport = "sse"
+	HTTPTransport  Transport = "http"
 )
 
 type RunOptions struct {
 	Transport Transport
 	HTTPAddr  string
-	SSEPath   string
 }
 
 // MCPServer wraps the MCP server and its dependencies.
@@ -59,11 +59,11 @@ func NewMCPServer() *MCPServer {
 
 // Run starts the MCP server on stdio.
 func (s *MCPServer) Run() error {
-	return s.RunWithOptions(RunOptions{Transport: StdioTransport})
+	return s.RunWithOptions(context.Background(), RunOptions{Transport: StdioTransport})
 }
 
 // RunWithOptions starts the MCP server with the requested transport.
-func (s *MCPServer) RunWithOptions(opts RunOptions) error {
+func (s *MCPServer) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	transport := opts.Transport
 	if transport == "" {
 		transport = StdioTransport
@@ -71,26 +71,44 @@ func (s *MCPServer) RunWithOptions(opts RunOptions) error {
 	if opts.HTTPAddr == "" {
 		opts.HTTPAddr = ":8080"
 	}
-	if opts.SSEPath == "" {
-		opts.SSEPath = "/sse"
-	}
-	if !strings.HasPrefix(opts.SSEPath, "/") {
-		return fmt.Errorf("SSE path must start with /")
-	}
 
 	switch transport {
 	case StdioTransport:
-		return s.srv.Run(context.Background(), &mcp.StdioTransport{})
-	case SSETransport:
-		handler := mcp.NewSSEHandler(func(*http.Request) *mcp.Server {
-			return s.srv
-		}, nil)
-		mux := http.NewServeMux()
-		mux.Handle(opts.SSEPath, handler)
-		log.Printf("tree-sitter-mcp listening for SSE at http://%s%s", opts.HTTPAddr, opts.SSEPath)
-		return http.ListenAndServe(opts.HTTPAddr, mux)
+		return s.srv.Run(ctx, &mcp.StdioTransport{})
+	case HTTPTransport:
+		return s.runHTTP(ctx, opts.HTTPAddr)
 	default:
-		return fmt.Errorf("unsupported transport %q, expected stdio or sse", transport)
+		return fmt.Errorf("unsupported transport %q, expected stdio or http", transport)
+	}
+}
+
+func (s *MCPServer) runHTTP(ctx context.Context, httpAddr string) error {
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return s.srv
+	}, nil)
+
+	httpServer := &http.Server{
+		Addr:              httpAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("tree-sitter-mcp: listening on %q", httpAddr)
+		errCh <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return httpServer.Shutdown(shutdownCtx)
 	}
 }
 

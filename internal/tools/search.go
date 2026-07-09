@@ -3,6 +3,7 @@ package tools
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -260,7 +261,8 @@ func RunQuery(
 		return nil
 	}
 
-	if filePath != "" {
+	switch {
+	case filePath != "":
 		absPath, err := project.ResolveFilePath(filePath)
 		if err != nil {
 			return nil, err
@@ -274,7 +276,7 @@ func RunQuery(
 		if err := processFile(absPath, filePath, lang); err != nil {
 			return nil, err
 		}
-	} else if lang != "" {
+	case lang != "":
 		err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil //nolint:nilerr
@@ -299,10 +301,10 @@ func RunQuery(
 			}
 			return processFile(path, relPath, lang)
 		})
-		if err != nil && err != filepath.SkipAll {
+		if err != nil && !errors.Is(err, filepath.SkipAll) {
 			return nil, err
 		}
-	} else {
+	default:
 		return nil, fmt.Errorf("either language or file_path must be provided")
 	}
 
