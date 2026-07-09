@@ -63,8 +63,10 @@ func run() error {
 	cfgMgr := srv.GetContainer().ConfigManager
 
 	if runtimeCfg.ConfigPath != "" {
+		//nolint:gosec // %q escapes control characters in user-provided paths.
 		log.Printf("Loading configuration from %q\n", runtimeCfg.ConfigPath)
 		if err := cfgMgr.LoadFromFile(runtimeCfg.ConfigPath); err != nil {
+			//nolint:gosec // %q escapes control characters in error text derived from file paths.
 			log.Printf("Warning: failed to load config: %q\n", err.Error())
 		} else {
 			srv.GetContainer().ApplyConfig()
@@ -86,6 +88,7 @@ func run() error {
 	if runtimeCfg.PreParsePath != "" {
 		container := srv.GetContainer()
 		cfg := container.GetConfig()
+		//nolint:gosec // %q escapes control characters in user-provided paths.
 		log.Printf("Pre-parsing project at %q ...\n", runtimeCfg.PreParsePath)
 		result, err := tools.PreParseProject(
 			runtimeCfg.PreParsePath,
@@ -94,9 +97,11 @@ func run() error {
 			cfg.Security.ExcludedDirs,
 		)
 		if err != nil {
+			//nolint:gosec // %q escapes control characters in error text derived from file paths.
 			log.Printf("Pre-parse warning: %q\n", err.Error())
 		}
 		if result != nil {
+			//nolint:gosec // Pre-parse summary values are typed counters and duration.
 			log.Printf("Pre-parse complete: %d files scanned, %d parsed, %d skipped, %d errors in %.1fs\n",
 				result.TotalFiles, result.Parsed, result.Skipped, result.Errors, result.ElapsedSecs)
 			for lang, count := range result.ByLanguage {
@@ -111,6 +116,7 @@ func run() error {
 		Transport: server.Transport(runtimeCfg.Transport),
 		HTTPAddr:  runtimeCfg.HTTPAddr,
 	}
+	//nolint:gosec // Transport is formatted with %q, numeric config values are typed.
 	log.Printf("Starting tree-sitter MCP server (cache: %v, max_file_size: %dMB, max_depth: %d, transport: %q)\n",
 		cfg.Cache.Enabled, cfg.Security.MaxFileSizeMB, cfg.Language.DefaultMaxDepth, runOpts.Transport)
 
