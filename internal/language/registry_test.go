@@ -94,8 +94,11 @@ func TestIsLanguageAvailable(t *testing.T) {
 	if !r.IsLanguageAvailable("python") {
 		t.Error("python should be available in new registry")
 	}
-	if r.IsLanguageAvailable("typescript") {
-		t.Error("typescript should not be available until a parser is registered")
+	if !r.IsLanguageAvailable("typescript") {
+		t.Error("typescript should be available in new registry")
+	}
+	if !r.IsLanguageAvailable("tsx") {
+		t.Error("tsx should be available in new registry")
 	}
 }
 
@@ -103,15 +106,15 @@ func TestListAvailableLanguages(t *testing.T) {
 	r := NewRegistry()
 
 	langs := r.ListAvailableLanguages()
-	if len(langs) != 11 {
-		t.Errorf("new registry should have 11 bundled languages, got %d", len(langs))
+	if len(langs) != 13 {
+		t.Errorf("new registry should have 13 bundled languages, got %d", len(langs))
 	}
 }
 
 func TestGetLanguageNotRegistered(t *testing.T) {
 	r := NewRegistry()
 
-	_, err := r.GetLanguage("typescript")
+	_, err := r.GetLanguage("kotlin")
 	if err == nil {
 		t.Error("GetLanguage should fail for unregistered language")
 	}
@@ -120,7 +123,7 @@ func TestGetLanguageNotRegistered(t *testing.T) {
 func TestGetParserNotRegistered(t *testing.T) {
 	r := NewRegistry()
 
-	_, err := r.GetParser("typescript")
+	_, err := r.GetParser("kotlin")
 	if err == nil {
 		t.Error("GetParser should fail for unregistered language")
 	}

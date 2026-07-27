@@ -4,6 +4,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,7 @@ type RuntimeConfig struct {
 	PreParsePath string
 	Transport    Transport
 	HTTPAddr     string
+	AllowRemote  bool
 	ShowVersion  bool
 }
 
@@ -86,10 +88,11 @@ func DefaultConfig() *ServerConfig {
 // Environment variables:
 //   - MCP_TRANSPORT (stdio|http)
 //   - MCP_HTTP_ADDR
+//   - MCP_HTTP_ALLOW_REMOTE (true|false)
 func LoadRuntime(args []string) (*RuntimeConfig, error) {
 	cfg := &RuntimeConfig{
 		Transport: TransportStdio,
-		HTTPAddr:  ":8080",
+		HTTPAddr:  "127.0.0.1:8080",
 	}
 
 	if v := strings.TrimSpace(os.Getenv("MCP_TRANSPORT")); v != "" {
@@ -97,6 +100,9 @@ func LoadRuntime(args []string) (*RuntimeConfig, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("MCP_HTTP_ADDR")); v != "" {
 		cfg.HTTPAddr = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MCP_HTTP_ALLOW_REMOTE")); v != "" {
+		cfg.AllowRemote = strings.EqualFold(v, "true") || v == "1"
 	}
 
 	fs := flag.NewFlagSet("tree-sitter-mcp", flag.ContinueOnError)
@@ -106,6 +112,7 @@ func LoadRuntime(args []string) (*RuntimeConfig, error) {
 	preParsePath := fs.String("pre-parse", cfg.PreParsePath, "Pre-parse all source files in the given directory at startup")
 	transport := fs.String("transport", string(cfg.Transport), "MCP transport: stdio or http")
 	httpAddr := fs.String("http-addr", cfg.HTTPAddr, "HTTP listen address when using --transport=http")
+	allowRemote := fs.Bool("allow-remote-http", cfg.AllowRemote, "Allow binding HTTP transport to non-loopback addresses")
 	showVersion := fs.Bool("version", cfg.ShowVersion, "Show version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -118,6 +125,7 @@ func LoadRuntime(args []string) (*RuntimeConfig, error) {
 	cfg.PreParsePath = strings.TrimSpace(*preParsePath)
 	cfg.Transport = Transport(strings.ToLower(strings.TrimSpace(*transport)))
 	cfg.HTTPAddr = strings.TrimSpace(*httpAddr)
+	cfg.AllowRemote = *allowRemote
 	cfg.ShowVersion = *showVersion
 
 	if err := cfg.validate(); err != nil {
@@ -131,7 +139,24 @@ func (c *RuntimeConfig) validate() error {
 	if c.Transport != TransportStdio && c.Transport != TransportHTTP {
 		return fmt.Errorf("transport must be 'stdio' or 'http', got '%s'", c.Transport)
 	}
+	if c.Transport == TransportHTTP && !c.AllowRemote && isWildcardListenAddress(c.HTTPAddr) {
+		return fmt.Errorf("refusing non-loopback HTTP listen address %q; use --allow-remote-http to override", c.HTTPAddr)
+	}
 	return nil
+}
+
+func isWildcardListenAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Inputs like ":8080" and malformed values should be treated as potentially unsafe.
+		return strings.HasPrefix(addr, ":") || addr == ""
+	}
+
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return true
+	}
+	return false
 }
 
 // LoadFromFile loads configuration from a YAML file, falling back to defaults.

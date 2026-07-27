@@ -69,7 +69,7 @@ func (s *MCPServer) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		transport = StdioTransport
 	}
 	if opts.HTTPAddr == "" {
-		opts.HTTPAddr = ":8080"
+		opts.HTTPAddr = "127.0.0.1:8080"
 	}
 
 	switch transport {
@@ -115,6 +115,14 @@ func (s *MCPServer) runHTTP(ctx context.Context, httpAddr string) error {
 // GetContainer returns the dependency container for external configuration.
 func (s *MCPServer) GetContainer() *container.Container {
 	return s.container
+}
+
+func readOnlyTool(name, description string) *mcp.Tool {
+	return &mcp.Tool{
+		Name:        name,
+		Description: description,
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}
 }
 
 // --- Tool argument types (used for automatic schema inference) ---
@@ -171,6 +179,13 @@ type nodePosArgs struct {
 	Path    string `json:"path"`
 	Row     int    `json:"row"`
 	Column  int    `json:"column"`
+}
+
+type parseDiagnosticsArgs struct {
+	Project     string `json:"project"`
+	Path        string `json:"path"`
+	MaxIssues   *int   `json:"max_issues,omitempty"`
+	IncludeText *bool  `json:"include_text,omitempty"`
 }
 
 type findTextArgs struct {
@@ -272,10 +287,7 @@ func (s *MCPServer) registerTools() {
 	}, s.handleRegisterProject)
 
 	// --- list_projects ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "list_projects",
-		Description: "List all registered projects.",
-	}, s.handleListProjects)
+	mcp.AddTool(s.srv, readOnlyTool("list_projects", "List all registered projects."), s.handleListProjects)
 
 	// --- remove_project ---
 	mcp.AddTool(s.srv, &mcp.Tool{
@@ -284,100 +296,55 @@ func (s *MCPServer) registerTools() {
 	}, s.handleRemoveProject)
 
 	// --- list_languages ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "list_languages",
-		Description: "List available tree-sitter languages.",
-	}, s.handleListLanguages)
+	mcp.AddTool(s.srv, readOnlyTool("list_languages", "List available tree-sitter languages."), s.handleListLanguages)
 
 	// --- check_language ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "check_language",
-		Description: "Check if a tree-sitter language parser is available.",
-	}, s.handleCheckLanguage)
+	mcp.AddTool(s.srv, readOnlyTool("check_language", "Check if a tree-sitter language parser is available."), s.handleCheckLanguage)
 
 	// --- list_files ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "list_files",
-		Description: "List files in a project, optionally filtered by pattern, depth, and extensions.",
-	}, s.handleListFiles)
+	mcp.AddTool(s.srv, readOnlyTool("list_files", "List files in a project, optionally filtered by pattern, depth, and extensions."), s.handleListFiles)
 
 	// --- get_file ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_file",
-		Description: "Get the content of a file in a project.",
-	}, s.handleGetFile)
+	mcp.AddTool(s.srv, readOnlyTool("get_file", "Get the content of a file in a project."), s.handleGetFile)
 
 	// --- get_file_metadata ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_file_metadata",
-		Description: "Get metadata for a file (size, modification time, etc.).",
-	}, s.handleGetFileMetadata)
+	mcp.AddTool(s.srv, readOnlyTool("get_file_metadata", "Get metadata for a file (size, modification time, etc.)."), s.handleGetFileMetadata)
 
 	// --- get_ast ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_ast",
-		Description: "Get the abstract syntax tree (AST) for a file as a nested JSON structure.",
-	}, s.handleGetAST)
+	mcp.AddTool(s.srv, readOnlyTool("get_ast", "Get the abstract syntax tree (AST) for a file as a nested JSON structure."), s.handleGetAST)
 
 	// --- get_node_at_position ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_node_at_position",
-		Description: "Find the AST node at a specific row and column position in a file.",
-	}, s.handleGetNodeAtPosition)
+	mcp.AddTool(s.srv, readOnlyTool("get_node_at_position", "Find the AST node at a specific row and column position in a file."), s.handleGetNodeAtPosition)
+
+	// --- get_parse_diagnostics ---
+	mcp.AddTool(s.srv, readOnlyTool("get_parse_diagnostics", "Report parse health for a file, including ERROR and MISSING syntax nodes."), s.handleGetParseDiagnostics)
 
 	// --- find_text ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "find_text",
-		Description: "Search for a text pattern in project files with regex, case, and context support.",
-	}, s.handleFindText)
+	mcp.AddTool(s.srv, readOnlyTool("find_text", "Search for a text pattern in project files with regex, case, and context support."), s.handleFindText)
 
 	// --- run_query ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "run_query",
-		Description: "Run a tree-sitter query (S-expression) on project files.",
-	}, s.handleRunQuery)
+	mcp.AddTool(s.srv, readOnlyTool("run_query", "Run a tree-sitter query (S-expression) on project files."), s.handleRunQuery)
 
 	// --- get_query_template ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_query_template",
-		Description: "Get a predefined tree-sitter query template (e.g., functions, classes, imports).",
-	}, s.handleGetQueryTemplate)
+	mcp.AddTool(s.srv, readOnlyTool("get_query_template", "Get a predefined tree-sitter query template (e.g., functions, classes, imports)."), s.handleGetQueryTemplate)
 
 	// --- list_query_templates ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "list_query_templates",
-		Description: "List available tree-sitter query templates, optionally filtered by language.",
-	}, s.handleListQueryTemplates)
+	mcp.AddTool(s.srv, readOnlyTool("list_query_templates", "List available tree-sitter query templates, optionally filtered by language."), s.handleListQueryTemplates)
 
 	// --- get_symbols ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_symbols",
-		Description: "Extract symbols (functions, classes, imports, etc.) from a file.",
-	}, s.handleGetSymbols)
+	mcp.AddTool(s.srv, readOnlyTool("get_symbols", "Extract symbols (functions, classes, imports, etc.) from a file."), s.handleGetSymbols)
 
 	// --- analyze_project ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "analyze_project",
-		Description: "Analyze overall project structure: file counts, languages, top-level files.",
-	}, s.handleAnalyzeProject)
+	mcp.AddTool(s.srv, readOnlyTool("analyze_project", "Analyze overall project structure: file counts, languages, top-level files."), s.handleAnalyzeProject)
 
 	// --- get_dependencies ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_dependencies",
-		Description: "Find the dependencies (imports/includes) of a file.",
-	}, s.handleGetDependencies)
+	mcp.AddTool(s.srv, readOnlyTool("get_dependencies", "Find the dependencies (imports/includes) of a file."), s.handleGetDependencies)
 
 	// --- analyze_complexity ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "analyze_complexity",
-		Description: "Analyze code complexity: line count, function count, average function length.",
-	}, s.handleAnalyzeComplexity)
+	mcp.AddTool(s.srv, readOnlyTool("analyze_complexity", "Analyze code complexity: line count, function count, average function length."), s.handleAnalyzeComplexity)
 
 	// --- find_usage ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "find_usage",
-		Description: "Find all usages of a symbol (identifier) across project files.",
-	}, s.handleFindUsage)
+	mcp.AddTool(s.srv, readOnlyTool("find_usage", "Find all usages of a symbol (identifier) across project files."), s.handleFindUsage)
 
 	// --- clear_cache ---
 	mcp.AddTool(s.srv, &mcp.Tool{
@@ -386,34 +353,19 @@ func (s *MCPServer) registerTools() {
 	}, s.handleClearCache)
 
 	// --- build_query ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "build_query",
-		Description: "Combine multiple query templates or raw patterns (OR/AND) into a compound tree-sitter query.",
-	}, s.handleBuildQuery)
+	mcp.AddTool(s.srv, readOnlyTool("build_query", "Combine multiple query templates or raw patterns (OR/AND) into a compound tree-sitter query."), s.handleBuildQuery)
 
 	// --- adapt_query ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "adapt_query",
-		Description: "Adapt a tree-sitter query from one language to another by translating node type names.",
-	}, s.handleAdaptQuery)
+	mcp.AddTool(s.srv, readOnlyTool("adapt_query", "Adapt a tree-sitter query from one language to another by translating node type names."), s.handleAdaptQuery)
 
 	// --- get_node_types ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "get_node_types",
-		Description: "Get descriptions of common AST node types for a language, or list all available languages.",
-	}, s.handleGetNodeTypes)
+	mcp.AddTool(s.srv, readOnlyTool("get_node_types", "Get descriptions of common AST node types for a language, or list all available languages."), s.handleGetNodeTypes)
 
 	// --- find_similar_code ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "find_similar_code",
-		Description: "Find structurally similar code in a project using AST fingerprinting and Jaccard similarity.",
-	}, s.handleFindSimilarCode)
+	mcp.AddTool(s.srv, readOnlyTool("find_similar_code", "Find structurally similar code in a project using AST fingerprinting and Jaccard similarity."), s.handleFindSimilarCode)
 
 	// --- diagnose_config ---
-	mcp.AddTool(s.srv, &mcp.Tool{
-		Name:        "diagnose_config",
-		Description: "Diagnose issues with YAML configuration loading (file existence, YAML validity, config changes).",
-	}, s.handleDiagnoseConfig)
+	mcp.AddTool(s.srv, readOnlyTool("diagnose_config", "Diagnose issues with YAML configuration loading (file existence, YAML validity, config changes)."), s.handleDiagnoseConfig)
 
 	// Register prompts.
 	s.registerPrompts()
@@ -503,7 +455,8 @@ func (s *MCPServer) handleListFiles(ctx context.Context, req *mcp.CallToolReques
 		pattern = *args.Pattern
 	}
 
-	files, err := tools.ListProjectFiles(project, pattern, args.MaxDepth, args.Extensions)
+	cfg := s.container.GetConfig()
+	files, err := tools.ListProjectFiles(project, pattern, args.MaxDepth, args.Extensions, cfg.Security.ExcludedDirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error listing files: %w", err)
 	}
@@ -594,6 +547,29 @@ func (s *MCPServer) handleGetNodeAtPosition(ctx context.Context, req *mcp.CallTo
 	return textResult(formatJSON(result)), nil, nil
 }
 
+func (s *MCPServer) handleGetParseDiagnostics(ctx context.Context, req *mcp.CallToolRequest, args parseDiagnosticsArgs) (*mcp.CallToolResult, any, error) {
+	project, err := s.container.ProjectRegistry.GetProject(args.Project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project error: %w", err)
+	}
+
+	maxIssues := 100
+	if args.MaxIssues != nil {
+		maxIssues = *args.MaxIssues
+	}
+	includeText := false
+	if args.IncludeText != nil {
+		includeText = *args.IncludeText
+	}
+
+	result, err := tools.GetParseDiagnostics(project, args.Path, s.container.LanguageRegistry, s.container.TreeCache, maxIssues, includeText)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse diagnostics error: %w", err)
+	}
+
+	return textResult(formatJSON(result)), nil, nil
+}
+
 func (s *MCPServer) handleFindText(ctx context.Context, req *mcp.CallToolRequest, args findTextArgs) (*mcp.CallToolResult, any, error) {
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
@@ -627,7 +603,8 @@ func (s *MCPServer) handleFindText(ctx context.Context, req *mcp.CallToolRequest
 		filePattern = *args.FilePattern
 	}
 
-	results, err := tools.SearchText(project, args.Pattern, filePattern, maxResults, caseSensitive, wholeWord, useRegex, contextLines)
+	cfg := s.container.GetConfig()
+	results, err := tools.SearchText(project, args.Pattern, filePattern, maxResults, caseSensitive, wholeWord, useRegex, contextLines, cfg.Security.ExcludedDirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("search error: %w", err)
 	}
@@ -662,7 +639,8 @@ func (s *MCPServer) handleRunQuery(ctx context.Context, req *mcp.CallToolRequest
 		compact = *args.Compact
 	}
 
-	results, err := tools.RunQuery(project, args.Query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, maxResults, captureFilter, compact)
+	cfg := s.container.GetConfig()
+	results, err := tools.RunQuery(project, args.Query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, maxResults, captureFilter, compact, cfg.Security.ExcludedDirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query error: %w", err)
 	}
@@ -772,7 +750,8 @@ func (s *MCPServer) handleFindUsage(ctx context.Context, req *mcp.CallToolReques
 	}
 
 	query := fmt.Sprintf(`((identifier) @reference (#eq? @reference %s))`, strconv.Quote(args.Symbol))
-	results, err := tools.RunQuery(project, query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, 100, "", false)
+	cfg := s.container.GetConfig()
+	results, err := tools.RunQuery(project, query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, 100, "", false, cfg.Security.ExcludedDirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("usage search error: %w", err)
 	}
@@ -828,7 +807,8 @@ func (s *MCPServer) handleFindSimilarCode(ctx context.Context, req *mcp.CallTool
 		minSimilarity = *args.MinSimilarity
 	}
 
-	results, err := tools.FindSimilarCode(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache, maxResults, minSimilarity)
+	cfg := s.container.GetConfig()
+	results, err := tools.FindSimilarCode(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache, maxResults, minSimilarity, cfg.Security.ExcludedDirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find_similar_code error: %w", err)
 	}

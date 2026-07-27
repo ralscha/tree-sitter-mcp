@@ -11,12 +11,13 @@ import (
 )
 
 // ListProjectFiles lists files in a project with optional filtering.
-func ListProjectFiles(project *models.Project, pattern string, maxDepth *int, extensions []string) ([]string, error) {
+func ListProjectFiles(project *models.Project, pattern string, maxDepth *int, extensions []string, excludedDirs []string) ([]string, error) {
 	if pattern == "" {
 		pattern = "**/*"
 	}
 
 	var files []string
+	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 	extSet := make(map[string]bool)
 	for _, ext := range extensions {
 		extSet[strings.ToLower(ext)] = true
@@ -27,36 +28,19 @@ func ListProjectFiles(project *models.Project, pattern string, maxDepth *int, ex
 			return nil //nolint:nilerr
 		}
 
-		base := filepath.Base(path)
-
-		// Skip hidden files and directories.
-		if strings.HasPrefix(base, ".") {
-			if info.IsDir() {
+		if info.IsDir() {
+			if filter.ShouldSkipDir(path, info, maxDepth) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if info.IsDir() {
+		if filter.ShouldSkipFile(path, info) {
 			return nil
 		}
 
-		if !isAllowedRegularFile(path, info) {
-			return nil
-		}
-
-		relPath, _ := filepath.Rel(project.RootPath, path)
-		relPath = filepath.ToSlash(relPath)
-
-		if maxDepth != nil && *maxDepth >= 0 {
-			depth := 0
-			if relPath != "." {
-				depth = strings.Count(relPath, "/")
-			}
-			if depth > *maxDepth {
-				return nil
-			}
-		}
+		relPath := filter.relativePath(path)
+		base := filepath.Base(path)
 
 		// Filter by extensions.
 		if len(extSet) > 0 {

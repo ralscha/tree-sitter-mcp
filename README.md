@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 - **20+ MCP tools** covering file ops, AST inspection, symbol extraction, text/regex search, tree-sitter queries, complexity analysis, and more
 - **stdio and streamable HTTP transports** using the same MCP transport shape as the companion MCP servers
-- **Bundled parsers** for C, C++, Go, HTML, Java, JavaScript, JSON, PHP, Python, Ruby, and Rust
+- **Bundled parsers** for C, C++, Go, HTML, Java, JavaScript, JSON, PHP, Python, Ruby, Rust, and TypeScript/TSX
 - **Extension detection** for additional file types in project summaries and file filtering
 - **Project registry** to register multiple project directories and scope operations to each
 - **AST as JSON** with full or depth-limited abstract syntax trees
@@ -42,7 +42,8 @@ Flags:
   --disable-cache       Disable parse tree caching
   --pre-parse string    Pre-parse all source files in a directory at startup
   --transport string    MCP transport: stdio or http (default "stdio")
-  --http-addr string    HTTP listen address when using --transport=http (default ":8080")
+  --http-addr string    HTTP listen address when using --transport=http (default "127.0.0.1:8080")
+  --allow-remote-http   Allow binding HTTP transport to non-loopback addresses
   --version             Show version and exit
 ```
 
@@ -64,7 +65,7 @@ By default, the server communicates over stdio. Configure your MCP client to lau
 To serve MCP over streamable HTTP instead, run the server as an HTTP process:
 
 ```sh
-tree-sitter-mcp --transport=http --http-addr=:8080
+tree-sitter-mcp --transport=http --http-addr=127.0.0.1:8080
 ```
 
 Then configure a streamable HTTP-capable MCP client to connect to:
@@ -73,7 +74,9 @@ Then configure a streamable HTTP-capable MCP client to connect to:
 http://localhost:8080
 ```
 
-The same settings can be provided with `MCP_TRANSPORT` and `MCP_HTTP_ADDR`.
+Binding to non-loopback HTTP addresses is blocked by default. If you need to expose the server remotely, pass `--allow-remote-http` (or set `MCP_HTTP_ALLOW_REMOTE=true`) and provide a non-loopback `--http-addr`.
+
+The same settings can be provided with `MCP_TRANSPORT`, `MCP_HTTP_ADDR`, and `MCP_HTTP_ALLOW_REMOTE`.
 
 ### Pre-parsing a Project
 
@@ -132,6 +135,7 @@ Environment variable overrides currently supported:
 - `TREE_SITTER_MCP_CACHE_MAX_SIZE_MB`
 - `MCP_TRANSPORT` (`stdio` or `http`)
 - `MCP_HTTP_ADDR`
+- `MCP_HTTP_ALLOW_REMOTE` (`true` to allow non-loopback HTTP binding)
 
 ## MCP Tools
 
@@ -158,6 +162,7 @@ Environment variable overrides currently supported:
 |------|-------------|
 | `get_ast` | Get the full AST for a file as nested JSON |
 | `get_node_at_position` | Find the AST node at a specific row/column |
+| `get_parse_diagnostics` | Report syntax health, including `ERROR` and `MISSING` parse nodes |
 | `list_languages` | List available tree-sitter languages |
 | `check_language` | Check if a language parser is available |
 
@@ -218,13 +223,14 @@ Bundled tree-sitter parsers are available for AST, query, symbol, dependency, co
 | Python | `.py` |
 | Ruby | `.rb` |
 | Rust | `.rs` |
+| TypeScript | `.ts`, `.mts`, `.cts` |
+| TSX | `.tsx` |
 
 The server also recognizes these extensions for detection and project summaries, but parser-backed tools require a bundled or manually registered parser:
 
 | Language | Extensions |
 |----------|-----------|
 | C# | `.cs` |
-| TypeScript | `.ts`, `.tsx` |
 | Kotlin | `.kt` |
 | Swift | `.swift` |
 | Dart | `.dart` |

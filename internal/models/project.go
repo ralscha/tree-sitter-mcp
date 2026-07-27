@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	ignore "github.com/sabhiram/go-gitignore"
 )
 
 // ProjectRegistry manages registered projects.
@@ -129,18 +131,38 @@ func (p *Project) ScanFiles(registry LanguageDetector, excludedDirs []string) ma
 		excluded[d] = true
 	}
 
+	var gitIgnore *ignore.GitIgnore
+	if gi, err := ignore.CompileIgnoreFile(filepath.Join(p.RootPath, ".gitignore")); err == nil {
+		gitIgnore = gi
+	}
+
 	_ = filepath.Walk(p.RootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr // skip inaccessible files
 		}
 
-		// Skip hidden files/dirs and excluded dirs.
+		// Skip hidden files/dirs, excluded dirs, and .gitignore matches.
 		base := filepath.Base(path)
+		relPath, relErr := filepath.Rel(p.RootPath, path)
+		if relErr != nil {
+			relPath = base
+		}
+		relPath = filepath.ToSlash(relPath)
+
 		if strings.HasPrefix(base, ".") {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+
+		if gitIgnore != nil && relPath != "." {
+			if gitIgnore.MatchesPath(relPath) || (info.IsDir() && gitIgnore.MatchesPath(relPath+"/")) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 
 		if info.IsDir() && excluded[base] {

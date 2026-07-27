@@ -42,6 +42,7 @@ func SearchText(
 	wholeWord bool,
 	useRegex bool,
 	contextLines int,
+	excludedDirs []string,
 ) ([]SearchMatch, error) {
 	if maxResults <= 0 {
 		maxResults = 100
@@ -68,28 +69,25 @@ func SearchText(
 	}
 
 	var results []SearchMatch
+	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 
 	err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 
-		base := filepath.Base(path)
-		if strings.HasPrefix(base, ".") {
-			if info.IsDir() {
+		if info.IsDir() {
+			if filter.ShouldSkipDir(path, info, nil) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if info.IsDir() {
-			return nil
-		}
-		if !isAllowedRegularFile(path, info) {
+		if filter.ShouldSkipFile(path, info) {
 			return nil
 		}
 
-		relPath, _ := filepath.Rel(project.RootPath, path)
-		relPath = filepath.ToSlash(relPath)
+		relPath := filter.relativePath(path)
+		base := filepath.Base(path)
 		if filePattern != "" && filePattern != "**/*" && filePattern != "*" {
 			pattern := filepath.ToSlash(filePattern)
 			matchedRel, _ := filepath.Match(pattern, relPath)
@@ -184,6 +182,7 @@ func RunQuery(
 	maxResults int,
 	captureFilter string,
 	compact bool,
+	excludedDirs []string,
 ) ([]QueryResult, error) {
 	if maxResults <= 0 {
 		maxResults = 100
@@ -277,22 +276,21 @@ func RunQuery(
 			return nil, err
 		}
 	case lang != "":
+		filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 		err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil //nolint:nilerr
 			}
-			base := filepath.Base(path)
-			if strings.HasPrefix(base, ".") {
-				if info.IsDir() {
+			if info.IsDir() {
+				if filter.ShouldSkipDir(path, info, nil) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if info.IsDir() || !isAllowedRegularFile(path, info) {
+			if filter.ShouldSkipFile(path, info) {
 				return nil
 			}
-			relPath, _ := filepath.Rel(project.RootPath, path)
-			relPath = filepath.ToSlash(relPath)
+			relPath := filter.relativePath(path)
 			if detected := langReg.LanguageForFile(relPath); detected != lang {
 				return nil
 			}

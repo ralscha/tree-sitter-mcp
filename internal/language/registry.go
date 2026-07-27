@@ -19,12 +19,18 @@ import (
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 var extToLang = map[string]string{
 	"py":    "python",
+	"pyi":   "python",
 	"js":    "javascript",
+	"mjs":   "javascript",
+	"cjs":   "javascript",
 	"ts":    "typescript",
+	"mts":   "typescript",
+	"cts":   "typescript",
 	"jsx":   "javascript",
 	"tsx":   "typescript",
 	"rb":    "ruby",
@@ -86,6 +92,8 @@ func NewRegistry() *Registry {
 	r.RegisterLanguage("python", sitter.NewLanguage(tree_sitter_python.Language()))
 	r.RegisterLanguage("ruby", sitter.NewLanguage(tree_sitter_ruby.Language()))
 	r.RegisterLanguage("rust", sitter.NewLanguage(tree_sitter_rust.Language()))
+	r.RegisterLanguage("typescript", sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()))
+	r.RegisterLanguage("tsx", sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()))
 
 	return r
 }

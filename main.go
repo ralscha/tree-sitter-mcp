@@ -14,6 +14,7 @@
 //	--pre-parse string    Pre-parse all source files in a directory at startup
 //	--transport string    MCP transport: stdio or http
 //	--http-addr string    HTTP listen address when using HTTP
+//	--allow-remote-http   Allow binding HTTP transport to non-loopback addresses
 //	--version             Show version and exit
 package main
 

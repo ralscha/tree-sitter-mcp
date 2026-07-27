@@ -239,39 +239,27 @@ func AnalyzeProjectStructure(
 	if len(excludedDirs) == 0 {
 		excludedDirs = []string{".git", "node_modules", "__pycache__", ".venv", "venv", ".tox"}
 	}
-	excluded := make(map[string]bool, len(excludedDirs))
-	for _, dir := range excludedDirs {
-		excluded[dir] = true
-	}
+	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 
 	langCounts := make(map[string]int)
 	err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr
 		}
-		base := filepath.Base(path)
-		if strings.HasPrefix(base, ".") {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		if info.IsDir() {
-			if excluded[base] {
+			depth := scanDepth
+			if depth < 0 {
+				depth = -1
+			}
+			if filter.ShouldSkipDir(path, info, &depth) {
 				return filepath.SkipDir
 			}
-			if scanDepth >= 0 {
-				rel, _ := filepath.Rel(project.RootPath, path)
-				rel = filepath.ToSlash(rel)
-				if rel != "." && strings.Count(rel, "/")+1 > scanDepth {
-					return filepath.SkipDir
-				}
-			}
 			return nil
 		}
-		if !isAllowedRegularFile(path, info) {
+		if filter.ShouldSkipFile(path, info) {
 			return nil
 		}
+		base := filepath.Base(path)
 		lang := langReg.LanguageForFile(base)
 		if lang != "" {
 			langCounts[lang]++
@@ -322,6 +310,7 @@ func FindSimilarCode(
 	treeCache *cache.TreeCache,
 	maxResults int,
 	minSimilarity float64,
+	excludedDirs []string,
 ) ([]SimilarCodeMatch, error) {
 	if maxResults <= 0 {
 		maxResults = 10
@@ -347,24 +336,22 @@ func FindSimilarCode(
 
 	// Walk the project and compare fingerprints.
 	var results []SimilarCodeMatch
+	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 	_ = filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr
 		}
-
-		base := filepath.Base(path)
-		if strings.HasPrefix(base, ".") {
-			if info.IsDir() {
+		if info.IsDir() {
+			if filter.ShouldSkipDir(path, info, nil) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if info.IsDir() || !isAllowedRegularFile(path, info) {
+		if filter.ShouldSkipFile(path, info) {
 			return nil
 		}
 
-		relPath, _ := filepath.Rel(project.RootPath, path)
-		relPath = filepath.ToSlash(relPath)
+		relPath := filter.relativePath(path)
 
 		if relPath == filePath {
 			return nil // Skip self.

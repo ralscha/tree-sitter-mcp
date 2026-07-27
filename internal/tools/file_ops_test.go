@@ -16,7 +16,7 @@ func TestListProjectFilesRespectsDepthAndPathPattern(t *testing.T) {
 
 	project := &models.Project{RootPath: dir}
 	maxDepth := 1
-	files, err := ListProjectFiles(project, "src/*.go", &maxDepth, nil)
+	files, err := ListProjectFiles(project, "src/*.go", &maxDepth, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

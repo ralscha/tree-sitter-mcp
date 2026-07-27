@@ -146,15 +146,15 @@ func TestLoadRuntimeDefaults(t *testing.T) {
 	if cfg.Transport != TransportStdio {
 		t.Errorf("transport = %s, want %s", cfg.Transport, TransportStdio)
 	}
-	if cfg.HTTPAddr != ":8080" {
-		t.Errorf("http_addr = %s, want :8080", cfg.HTTPAddr)
+	if cfg.HTTPAddr != "127.0.0.1:8080" {
+		t.Errorf("http_addr = %s, want 127.0.0.1:8080", cfg.HTTPAddr)
 	}
 }
 
 func TestLoadRuntimeEnv(t *testing.T) {
 	clearRuntimeEnv(t)
 	t.Setenv("MCP_TRANSPORT", "http")
-	t.Setenv("MCP_HTTP_ADDR", ":9090")
+	t.Setenv("MCP_HTTP_ADDR", "127.0.0.1:9090")
 
 	cfg, err := LoadRuntime(nil)
 	if err != nil {
@@ -164,15 +164,15 @@ func TestLoadRuntimeEnv(t *testing.T) {
 	if cfg.Transport != TransportHTTP {
 		t.Errorf("transport = %s, want %s", cfg.Transport, TransportHTTP)
 	}
-	if cfg.HTTPAddr != ":9090" {
-		t.Errorf("http_addr = %s, want :9090", cfg.HTTPAddr)
+	if cfg.HTTPAddr != "127.0.0.1:9090" {
+		t.Errorf("http_addr = %s, want 127.0.0.1:9090", cfg.HTTPAddr)
 	}
 }
 
 func TestLoadRuntimeFlagOverride(t *testing.T) {
 	clearRuntimeEnv(t)
 	t.Setenv("MCP_TRANSPORT", "stdio")
-	t.Setenv("MCP_HTTP_ADDR", ":8080")
+	t.Setenv("MCP_HTTP_ADDR", "127.0.0.1:8080")
 
 	cfg, err := LoadRuntime([]string{
 		"--config=config.yaml",
@@ -180,7 +180,7 @@ func TestLoadRuntimeFlagOverride(t *testing.T) {
 		"--disable-cache",
 		"--pre-parse=.",
 		"--transport=http",
-		"--http-addr=:6060",
+		"--http-addr=127.0.0.1:6060",
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntime failed: %v", err)
@@ -201,8 +201,28 @@ func TestLoadRuntimeFlagOverride(t *testing.T) {
 	if cfg.Transport != TransportHTTP {
 		t.Errorf("transport = %s, want %s", cfg.Transport, TransportHTTP)
 	}
-	if cfg.HTTPAddr != ":6060" {
-		t.Errorf("http_addr = %s, want :6060", cfg.HTTPAddr)
+	if cfg.HTTPAddr != "127.0.0.1:6060" {
+		t.Errorf("http_addr = %s, want 127.0.0.1:6060", cfg.HTTPAddr)
+	}
+}
+
+func TestLoadRuntimeRejectsWildcardHTTPByDefault(t *testing.T) {
+	clearRuntimeEnv(t)
+
+	if _, err := LoadRuntime([]string{"--transport=http", "--http-addr=:8080"}); err == nil {
+		t.Fatal("expected wildcard HTTP bind to be rejected without explicit opt-in")
+	}
+}
+
+func TestLoadRuntimeAllowsWildcardHTTPWithOptIn(t *testing.T) {
+	clearRuntimeEnv(t)
+
+	cfg, err := LoadRuntime([]string{"--transport=http", "--http-addr=:8080", "--allow-remote-http"})
+	if err != nil {
+		t.Fatalf("LoadRuntime failed: %v", err)
+	}
+	if !cfg.AllowRemote {
+		t.Fatal("allow_remote should be true")
 	}
 }
 
@@ -321,4 +341,5 @@ func clearRuntimeEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("MCP_TRANSPORT", "")
 	t.Setenv("MCP_HTTP_ADDR", "")
+	t.Setenv("MCP_HTTP_ALLOW_REMOTE", "")
 }

@@ -15,7 +15,7 @@ func TestSearchTextRespectsFilePattern(t *testing.T) {
 	mustWriteSearchFile(t, filepath.Join(dir, "README.md"), "needle\n")
 
 	project := &models.Project{RootPath: dir}
-	results, err := SearchText(project, "needle", "*.go", 10, true, false, false, 0)
+	results, err := SearchText(project, "needle", "*.go", 10, true, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRunQueryReturnsInvalidQueryError(t *testing.T) {
 	defer treeCache.Close()
 	defer registry.Close()
 
-	_, err := RunQuery(project, "((not-valid", registry, treeCache, "main.go", "go", 10, "", false)
+	_, err := RunQuery(project, "((not-valid", registry, treeCache, "main.go", "go", 10, "", false, nil)
 	if err == nil {
 		t.Fatal("RunQuery should return invalid query errors")
 	}

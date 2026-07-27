@@ -46,10 +46,7 @@ func PreParseProject(
 		return nil, fmt.Errorf("%s is not a directory", absPath)
 	}
 
-	excludedSet := make(map[string]bool, len(excludedDirs))
-	for _, d := range excludedDirs {
-		excludedSet[d] = true
-	}
+	filter := NewProjectPathFilter(absPath, excludedDirs)
 
 	result := &PreParseResult{
 		RootPath:   absPath,
@@ -63,33 +60,21 @@ func PreParseProject(
 			return nil //nolint:nilerr // skip inaccessible entries
 		}
 
-		base := filepath.Base(path)
-
-		// Skip hidden files and directories.
-		if strings.HasPrefix(base, ".") {
-			if info.IsDir() {
+		if info.IsDir() {
+			if filter.ShouldSkipDir(path, info, nil) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// Skip excluded directories.
-		if info.IsDir() && excludedSet[base] {
-			return filepath.SkipDir
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
 		result.TotalFiles++
-		if !isAllowedRegularFile(path, info) {
+		if filter.ShouldSkipFile(path, info) {
 			result.Skipped++
 			return nil
 		}
 
 		// Detect language from extension.
-		lang := langReg.LanguageForFile(base)
+		lang := langReg.LanguageForFile(filepath.Base(path))
 		if lang == "" {
 			result.Skipped++
 			return nil
