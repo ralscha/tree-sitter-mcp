@@ -85,7 +85,7 @@ func (s *MCPServer) RunWithOptions(ctx context.Context, opts RunOptions) error {
 func (s *MCPServer) runHTTP(ctx context.Context, httpAddr string) error {
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return s.srv
-	}, nil)
+	}, &mcp.StreamableHTTPOptions{Stateless: true})
 
 	httpServer := &http.Server{
 		Addr:              httpAddr,
