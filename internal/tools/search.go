@@ -203,7 +203,7 @@ func RunQuery(
 
 		query, qerr := sitter.NewQuery(langObj, queryString)
 		if qerr != nil {
-			return fmt.Errorf("invalid query: %w", qerr)
+			return fmt.Errorf("invalid query: %w", *qerr)
 		}
 		defer query.Close()
 
