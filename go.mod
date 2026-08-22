@@ -1,6 +1,6 @@
 module tree-sitter-mcp
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
