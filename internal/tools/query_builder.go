@@ -3,24 +3,33 @@ package tools
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	"tree-sitter-mcp/internal/language"
 )
 
-// BuildQuery combines multiple query templates into a compound query.
-// combineMode can be "or" (union of matches) or "and" (requires all patterns to match).
+// BuildQuery combines multiple query templates into a query union.
 func BuildQuery(lang string, patterns []string, combineMode string) (map[string]any, error) {
 	if len(patterns) == 0 {
 		return nil, fmt.Errorf("no patterns provided")
 	}
+	combineMode = strings.ToLower(strings.TrimSpace(combineMode))
+	if combineMode == "" {
+		combineMode = "or"
+	}
+	if combineMode != "or" {
+		return nil, fmt.Errorf("unsupported combine mode %q: tree-sitter query patterns form a union", combineMode)
+	}
+	lang = strings.ToLower(strings.TrimSpace(lang))
 
 	var queries []string
 	for _, pattern := range patterns {
 		tmpl := language.GetQueryTemplate(lang, pattern)
 		if tmpl != "" {
 			queries = append(queries, tmpl)
-		} else if strings.Contains(pattern, "(") || strings.Contains(pattern, "@") {
+		} else if strings.Contains(pattern, "(") && strings.Contains(pattern, ")") {
 			// Treat as a raw query string only if it looks like a query.
 			queries = append(queries, pattern)
 		}
@@ -32,16 +41,6 @@ func BuildQuery(lang string, patterns []string, combineMode string) (map[string]
 	}
 
 	combined := strings.Join(queries, "\n")
-
-	switch strings.ToLower(combineMode) {
-	case "or":
-		// For OR, just concatenate — tree-sitter matches any pattern.
-	case "and":
-		// For AND, we'd need predicates. Add a hint.
-		combined += "\n\n;; Add #match? or #eq? predicates to require combinations of the above patterns."
-	default:
-		combined = strings.Join(queries, "\n")
-	}
 
 	return map[string]any{
 		"language":    lang,
@@ -55,13 +54,21 @@ func BuildQuery(lang string, patterns []string, combineMode string) (map[string]
 // AdaptQuery adapts a query from one language to another by translating node type names.
 func AdaptQuery(query string, fromLang string, toLang string) (map[string]any, error) {
 	translations := getNodeTypeTranslations()
+	fromLang = strings.ToLower(strings.TrimSpace(fromLang))
+	toLang = strings.ToLower(strings.TrimSpace(toLang))
 
 	pair := fromLang + "->" + toLang
 	revPair := toLang + "->" + fromLang
 
 	trans, ok := translations[pair]
 	if !ok {
-		trans, ok = translations[revPair]
+		if reverse, reverseOK := translations[revPair]; reverseOK {
+			trans = make(map[string]string, len(reverse))
+			for target, source := range reverse {
+				trans[source] = target
+			}
+			ok = true
+		}
 	}
 
 	if !ok {
@@ -75,10 +82,14 @@ func AdaptQuery(query string, fromLang string, toLang string) (map[string]any, e
 		}, nil
 	}
 
-	adapted := query
-	for from, to := range trans {
-		adapted = strings.ReplaceAll(adapted, from, to)
-	}
+	nodeType := regexp.MustCompile(`\(([A-Za-z_][A-Za-z0-9_]*)`)
+	adapted := nodeType.ReplaceAllStringFunc(query, func(match string) string {
+		name := strings.TrimPrefix(match, "(")
+		if replacement, exists := trans[name]; exists {
+			return "(" + replacement
+		}
+		return match
+	})
 
 	return map[string]any{
 		"original_language": fromLang,
@@ -111,6 +122,7 @@ func ListAllNodeTypes() map[string]any {
 	for lang := range descriptions {
 		langs = append(langs, lang)
 	}
+	sort.Strings(langs)
 	return map[string]any{
 		"languages": langs,
 	}

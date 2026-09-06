@@ -87,7 +87,7 @@ func PreParseProject(
 		}
 
 		// Parse the file (ParseFile handles caching internally).
-		_, _, parseErr := ParseFile(path, lang, langReg, treeCache)
+		tree, _, parseErr := ParseFile(path, lang, langReg, treeCache)
 		if parseErr != nil {
 			result.Errors++
 			if strings.EqualFold(os.Getenv("TREE_SITTER_MCP_LOG_LEVEL"), "DEBUG") {
@@ -95,6 +95,7 @@ func PreParseProject(
 			}
 			return nil
 		}
+		tree.Close()
 
 		result.Parsed++
 		result.ByLanguage[lang]++

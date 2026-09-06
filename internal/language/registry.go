@@ -4,6 +4,7 @@ package language
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -166,5 +167,6 @@ func (r *Registry) ListAvailableLanguages() []string {
 	for name := range r.languages {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }

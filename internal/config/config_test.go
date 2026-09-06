@@ -226,6 +226,24 @@ func TestLoadRuntimeAllowsWildcardHTTPWithOptIn(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeRejectsNonLoopbackHTTPByDefault(t *testing.T) {
+	clearRuntimeEnv(t)
+
+	if _, err := LoadRuntime([]string{"--transport=http", "--http-addr=192.168.1.20:8080"}); err == nil {
+		t.Fatal("expected non-loopback HTTP bind to be rejected without explicit opt-in")
+	}
+}
+
+func TestLoadRuntimeAllowsLoopbackHTTPAddresses(t *testing.T) {
+	clearRuntimeEnv(t)
+
+	for _, addr := range []string{"localhost:8080", "127.0.0.2:8080", "[::1]:8080"} {
+		if _, err := LoadRuntime([]string{"--transport=http", "--http-addr=" + addr}); err != nil {
+			t.Errorf("LoadRuntime rejected loopback address %q: %v", addr, err)
+		}
+	}
+}
+
 func TestLoadRuntimeInvalidTransport(t *testing.T) {
 	clearRuntimeEnv(t)
 
@@ -291,16 +309,44 @@ func TestLoadFromFile(t *testing.T) {
 }
 
 func TestLoadFromFileMissing(t *testing.T) {
-	// LoadFromFile returns defaults if file doesn't exist.
-	cfg, err := LoadFromFile("/nonexistent/path/config.yaml")
-	if err != nil {
-		t.Fatalf("LoadFromFile should not error for missing file: %v", err)
+	if _, err := LoadFromFile("/nonexistent/path/config.yaml"); err == nil {
+		t.Fatal("LoadFromFile should report an explicitly requested missing file")
 	}
-	if cfg == nil {
-		t.Fatal("LoadFromFile returned nil")
+}
+
+func TestLoadFromFileRejectsInvalidValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("cache:\n  max_size_mb: 0\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
-	if !cfg.Cache.Enabled {
-		t.Error("missing file should return defaults with cache enabled")
+
+	if _, err := LoadFromFile(path); err == nil {
+		t.Fatal("LoadFromFile should reject non-positive cache size")
+	}
+}
+
+func TestLoadFromFileRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("cache:\n  max_sze_mb: 10\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadFromFile(path); err == nil {
+		t.Fatal("LoadFromFile should reject unknown fields instead of ignoring likely typos")
+	}
+}
+
+func TestGetConfigReturnsIndependentCopy(t *testing.T) {
+	mgr := NewConfigurationManager()
+	copy := mgr.GetConfig()
+	copy.Cache.Enabled = false
+	copy.Security.ExcludedDirs[0] = "changed"
+
+	got := mgr.GetConfig()
+	if !got.Cache.Enabled || got.Security.ExcludedDirs[0] == "changed" {
+		t.Fatal("GetConfig exposed mutable internal configuration")
 	}
 }
 
@@ -334,6 +380,16 @@ func TestApplyEnvOverrides(t *testing.T) {
 
 	if cfg.LogLevel != "ERROR" {
 		t.Errorf("log_level = %s, want ERROR", cfg.LogLevel)
+	}
+}
+
+func TestConfigurationManagerAppliesEnvironmentWithoutConfigFile(t *testing.T) {
+	t.Setenv("TREE_SITTER_MCP_LOG_LEVEL", "debug")
+	t.Setenv("TREE_SITTER_MCP_CACHE_MAX_SIZE_MB", "42")
+
+	cfg := NewConfigurationManager().GetConfig()
+	if cfg.LogLevel != "DEBUG" || cfg.Cache.MaxSizeMB != 42 {
+		t.Fatalf("environment overrides not applied to defaults: %#v", cfg)
 	}
 }
 

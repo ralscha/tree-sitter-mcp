@@ -36,20 +36,8 @@ func TestBuildQueryOr(t *testing.T) {
 }
 
 func TestBuildQueryAnd(t *testing.T) {
-	result, err := BuildQuery("javascript", []string{"functions", "classes"}, "and")
-	if err != nil {
-		t.Fatalf("BuildQuery failed: %v", err)
-	}
-
-	query, _ := result["query"].(string)
-	if !strings.Contains(query, "function_declaration") {
-		t.Error("query should contain function_declaration pattern")
-	}
-	if !strings.Contains(query, "class_declaration") {
-		t.Error("query should contain class_declaration pattern")
-	}
-	if result["combine"] != "and" {
-		t.Errorf("combine = %v, want and", result["combine"])
+	if _, err := BuildQuery("javascript", []string{"functions", "classes"}, "and"); err == nil {
+		t.Fatal("BuildQuery should reject an AND mode it cannot implement correctly")
 	}
 }
 
@@ -217,6 +205,28 @@ func TestAdaptQueryGoToRust(t *testing.T) {
 	}
 }
 
+func TestAdaptQueryUsesInvertedReverseTranslation(t *testing.T) {
+	result, err := AdaptQuery("(function_item) @func", "rust", "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapted := result["adapted_query"].(string); adapted != "(function_declaration) @func" {
+		t.Fatalf("adapted_query = %q, want Go node type", adapted)
+	}
+}
+
+func TestAdaptQueryOnlyRewritesNodeTypes(t *testing.T) {
+	query := `(function_definition name: (identifier) @function_definition)`
+	result, err := AdaptQuery(query, "python", "javascript")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapted := result["adapted_query"].(string)
+	if adapted != `(function_declaration name: (identifier) @function_definition)` {
+		t.Fatalf("adapted_query = %q", adapted)
+	}
+}
+
 func TestBuildQueryDefaultCombine(t *testing.T) {
 	// When no combine mode is specified, should default to OR-like behavior.
 	result, err := BuildQuery("python", []string{"functions", "classes"}, "")
@@ -230,5 +240,8 @@ func TestBuildQueryDefaultCombine(t *testing.T) {
 	}
 	if !strings.Contains(query, "class_definition") {
 		t.Error("query should contain class_definition")
+	}
+	if result["combine"] != "or" {
+		t.Errorf("combine = %v, want normalized default or", result["combine"])
 	}
 }

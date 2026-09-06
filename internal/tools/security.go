@@ -60,6 +60,9 @@ func checkFileAllowed(path string) error {
 	if info.IsDir() {
 		return fmt.Errorf("path is a directory: %s", path)
 	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("path is not a regular file: %s", path)
+	}
 	if maxBytes > 0 && info.Size() > maxBytes {
 		return fmt.Errorf("file %s exceeds max_file_size_mb", path)
 	}

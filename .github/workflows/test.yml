@@ -4,13 +4,15 @@ on:
   push:
     paths:
       - '**/*.go'
-      - go.mod
-      - go.sum
+      - '**/go.mod'
+      - '**/go.sum'
+      - '.github/workflows/test.yml'
   pull_request:
     paths:
       - '**/*.go'
-      - go.mod
-      - go.sum
+      - '**/go.mod'
+      - '**/go.sum'
+      - '.github/workflows/test.yml'
 
 permissions:
   contents: read
@@ -32,4 +34,16 @@ jobs:
       - name: Run Go tests
         env:
           CGO_ENABLED: "1"
+        run: go test ./...
+
+      - name: Run Go vet
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./...
+
+      - name: Check formatting
+        run: test -z "$(git ls-files '*.go' | xargs gofmt -l)"
+
+      - name: Build and test demo
+        working-directory: demos/eino-architecture-detective
         run: go test ./...

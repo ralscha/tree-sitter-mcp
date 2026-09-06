@@ -31,7 +31,8 @@ import (
 	"tree-sitter-mcp/internal/tools"
 )
 
-const version = "0.1.0"
+// version is replaced by GoReleaser via -ldflags at release time.
+var version = "0.1.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -57,7 +58,7 @@ func run() error {
 	}
 
 	// Create the MCP server.
-	srv := server.NewMCPServer()
+	srv := server.NewMCPServerWithVersion(version)
 	defer srv.GetContainer().Close()
 
 	// Apply command-line configuration overrides.
@@ -114,10 +115,10 @@ func run() error {
 	// Log startup configuration.
 	cfg := cfgMgr.GetConfig()
 	runOpts := server.RunOptions{
-		Transport: server.Transport(runtimeCfg.Transport),
-		HTTPAddr:  runtimeCfg.HTTPAddr,
+		Transport:   server.Transport(runtimeCfg.Transport),
+		HTTPAddr:    runtimeCfg.HTTPAddr,
+		AllowRemote: runtimeCfg.AllowRemote,
 	}
-	//nolint:gosec // Transport is formatted with %q, numeric config values are typed.
 	log.Printf("Starting tree-sitter MCP server (cache: %v, max_file_size: %dMB, max_depth: %d, transport: %q)\n",
 		cfg.Cache.Enabled, cfg.Security.MaxFileSizeMB, cfg.Language.DefaultMaxDepth, runOpts.Transport)
 

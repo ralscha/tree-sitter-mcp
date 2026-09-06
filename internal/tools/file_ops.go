@@ -16,11 +16,14 @@ func ListProjectFiles(project *models.Project, pattern string, maxDepth *int, ex
 		pattern = "**/*"
 	}
 
-	var files []string
+	files := make([]string, 0)
 	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 	extSet := make(map[string]bool)
 	for _, ext := range extensions {
-		extSet[strings.ToLower(ext)] = true
+		normalized := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ext), "."))
+		if normalized != "" {
+			extSet[normalized] = true
+		}
 	}
 
 	err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
@@ -50,13 +53,12 @@ func ListProjectFiles(project *models.Project, pattern string, maxDepth *int, ex
 			}
 		}
 
-		// Filter by pattern (simple glob).
-		if pattern != "**/*" && pattern != "*" {
-			matchedRel, _ := filepath.Match(filepath.ToSlash(pattern), relPath)
-			matchedBase, _ := filepath.Match(filepath.ToSlash(pattern), base)
-			if !matchedRel && !matchedBase {
-				return nil
-			}
+		matched, matchErr := matchProjectPattern(pattern, relPath)
+		if matchErr != nil {
+			return matchErr
+		}
+		if !matched {
+			return nil
 		}
 
 		files = append(files, relPath)
@@ -84,8 +86,13 @@ func GetFileContent(project *models.Project, path string, maxLines *int, startLi
 
 	lines := strings.Split(string(data), "\n")
 
-	if startLine > 0 && startLine < len(lines) {
-		lines = lines[startLine:]
+	// Line numbers exposed by the tools are one-based. Zero keeps the
+	// historical default of starting at the beginning of the file.
+	if startLine > 1 {
+		if startLine > len(lines) {
+			return "", nil
+		}
+		lines = lines[startLine-1:]
 	}
 
 	if maxLines != nil && *maxLines > 0 && *maxLines < len(lines) {

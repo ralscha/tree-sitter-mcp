@@ -77,15 +77,16 @@ func DiagnoseYamlConfig(configPath string, cfgMgr *config.ConfigurationManager) 
 		"language.default_max_depth": cfgBefore.Language.DefaultMaxDepth,
 	}
 
-	// Try loading the config.
-	if loadErr := cfgMgr.LoadFromFile(configPath); loadErr != nil {
+	// Load into a temporary value. Diagnostics are read-only and must not mutate
+	// the server's active configuration.
+	cfgAfter, loadErr := config.LoadFromFile(configPath)
+	if loadErr != nil {
 		errStr := fmt.Sprintf("error loading config: %v", loadErr)
 		result.Error = &errStr
 		return result
 	}
 
-	// Capture config after loading.
-	cfgAfter := cfgMgr.GetConfig()
+	// Capture the configuration that would result from loading the file.
 	result.ConfigAfter = map[string]any{
 		"cache.max_size_mb":          cfgAfter.Cache.MaxSizeMB,
 		"security.max_file_size_mb":  cfgAfter.Security.MaxFileSizeMB,

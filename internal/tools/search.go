@@ -2,7 +2,6 @@
 package tools
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -56,6 +55,9 @@ func SearchText(
 		if !caseSensitive {
 			flags = "(?i)"
 		}
+		if wholeWord {
+			pattern = `\b(?:` + pattern + `)\b`
+		}
 		var err error
 		re, err = regexp.Compile(flags + pattern)
 		if err != nil {
@@ -67,13 +69,23 @@ func SearchText(
 			searchStr = strings.ToLower(searchStr)
 		}
 	}
+	if wholeWord && !useRegex {
+		flags := ""
+		if !caseSensitive {
+			flags = "(?i)"
+		}
+		re = regexp.MustCompile(flags + `\b` + regexp.QuoteMeta(pattern) + `\b`)
+	}
+	if contextLines < 0 {
+		contextLines = 0
+	}
 
-	var results []SearchMatch
+	results := make([]SearchMatch, 0)
 	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 
 	err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // skip inaccessible project entries
 		}
 
 		if info.IsDir() {
@@ -87,26 +99,24 @@ func SearchText(
 		}
 
 		relPath := filter.relativePath(path)
-		base := filepath.Base(path)
-		if filePattern != "" && filePattern != "**/*" && filePattern != "*" {
-			pattern := filepath.ToSlash(filePattern)
-			matchedRel, _ := filepath.Match(pattern, relPath)
-			matchedBase, _ := filepath.Match(pattern, base)
-			if !matchedRel && !matchedBase {
-				return nil
-			}
+		matchedPath, matchErr := matchProjectPattern(filePattern, relPath)
+		if matchErr != nil {
+			return fmt.Errorf("invalid file pattern: %w", matchErr)
 		}
-
-		file, err := os.Open(filepath.Clean(path)) //nolint:gosec // inside Walk callback, path is clean
-		if err != nil {
+		if !matchedPath {
 			return nil
 		}
-		defer func() { _ = file.Close() }()
 
-		scanner := bufio.NewScanner(file)
-		var lines []string
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
+		data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // path is constrained by the project walk
+		if err != nil {
+			return nil //nolint:nilerr // skip files that become unreadable during the walk
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		lines := strings.Split(string(data), "\n")
+		for i := range lines {
+			lines[i] = strings.TrimSuffix(lines[i], "\r")
 		}
 
 		for i, line := range lines {
@@ -114,12 +124,6 @@ func SearchText(
 			switch {
 			case re != nil:
 				matched = re.MatchString(line)
-			case wholeWord:
-				wordRe := regexp.MustCompile(`\b` + regexp.QuoteMeta(pattern) + `\b`)
-				if !caseSensitive {
-					wordRe = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(pattern) + `\b`)
-				}
-				matched = wordRe.MatchString(line)
 			case caseSensitive:
 				matched = strings.Contains(line, searchStr)
 			default:
@@ -187,25 +191,38 @@ func RunQuery(
 	if maxResults <= 0 {
 		maxResults = 100
 	}
+	if filePath == "" && lang == "" {
+		return nil, fmt.Errorf("either language or file_path must be provided")
+	}
+	if lang == "" {
+		lang = langReg.LanguageForFile(filePath)
+		if lang == "" {
+			return nil, fmt.Errorf("could not detect language for %s", filePath)
+		}
+	}
 
-	var results []QueryResult
+	langObj, err := langReg.GetLanguage(lang)
+	if err != nil {
+		return nil, err
+	}
+	query, queryErr := sitter.NewQuery(langObj, queryString)
+	if queryErr != nil {
+		return nil, fmt.Errorf("invalid query: %w", *queryErr)
+	}
+	defer query.Close()
+	captureNames := query.CaptureNames()
 
-	processFile := func(absPath, relPath, detectedLang string) error {
-		tree, sourceBytes, err := ParseFile(absPath, detectedLang, langReg, treeCache)
+	results := make([]QueryResult, 0)
+
+	processFile := func(absPath, relPath string, skipParseErrors bool) (bool, error) {
+		tree, sourceBytes, err := ParseFile(absPath, lang, langReg, treeCache)
 		if err != nil {
-			return nil // skip files that can't be parsed
+			if skipParseErrors {
+				return false, nil
+			}
+			return false, err
 		}
-
-		langObj, err := langReg.GetLanguage(detectedLang)
-		if err != nil {
-			return nil
-		}
-
-		query, qerr := sitter.NewQuery(langObj, queryString)
-		if qerr != nil {
-			return fmt.Errorf("invalid query: %w", *qerr)
-		}
-		defer query.Close()
+		defer tree.Close()
 
 		qc := sitter.NewQueryCursor()
 		defer qc.Close()
@@ -219,7 +236,7 @@ func RunQuery(
 
 			var captures []CaptureResult
 			for _, cap := range match.Captures {
-				captureName := query.CaptureNames()[cap.Index]
+				captureName := captureNames[cap.Index]
 				if captureFilter != "" && captureName != captureFilter {
 					continue
 				}
@@ -253,29 +270,22 @@ func RunQuery(
 					Captures: captures,
 				})
 				if len(results) >= maxResults {
-					return filepath.SkipAll
+					return true, nil
 				}
 			}
 		}
-		return nil
+		return false, nil
 	}
 
-	switch {
-	case filePath != "":
+	if filePath != "" {
 		absPath, err := project.ResolveFilePath(filePath)
 		if err != nil {
 			return nil, err
 		}
-		if lang == "" {
-			lang = langReg.LanguageForFile(filePath)
-		}
-		if lang == "" {
-			return nil, fmt.Errorf("could not detect language for %s", filePath)
-		}
-		if err := processFile(absPath, filePath, lang); err != nil {
+		if _, err := processFile(absPath, filePath, false); err != nil {
 			return nil, err
 		}
-	case lang != "":
+	} else {
 		filter := NewProjectPathFilter(project.RootPath, excludedDirs)
 		err := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -297,13 +307,18 @@ func RunQuery(
 			if len(results) >= maxResults {
 				return filepath.SkipAll
 			}
-			return processFile(path, relPath, lang)
+			stop, processErr := processFile(path, relPath, true)
+			if processErr != nil {
+				return processErr
+			}
+			if stop {
+				return filepath.SkipAll
+			}
+			return nil
 		})
 		if err != nil && !errors.Is(err, filepath.SkipAll) {
 			return nil, err
 		}
-	default:
-		return nil, fmt.Errorf("either language or file_path must be provided")
 	}
 
 	if len(results) > maxResults {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,13 +41,21 @@ func (r *ProjectRegistry) RegisterProject(name, path, description string) (*Proj
 	} else if !info.IsDir() {
 		return nil, fmt.Errorf("project path is not a directory: %s", absPath)
 	}
+	absPath, err = filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project path: %w", err)
+	}
+	absPath = filepath.Clean(absPath)
 
 	if name == "" {
 		name = filepath.Base(absPath)
 	}
 
 	if existing, ok := r.projects[name]; ok {
-		return existing, nil
+		if samePath(existing.RootPath, absPath) {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("project name %q is already registered for %s", name, existing.RootPath)
 	}
 
 	p := &Project{
@@ -87,9 +97,15 @@ func (r *ProjectRegistry) ListProjects() []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	result := make([]map[string]any, 0, len(r.projects))
-	for _, p := range r.projects {
-		result = append(result, p.ToMap())
+	names := make([]string, 0, len(r.projects))
+	for name := range r.projects {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	result := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		result = append(result, r.projects[name].ToMap())
 	}
 	return result
 }
@@ -101,16 +117,19 @@ type Project struct {
 	Description  string
 	Languages    map[string]int // language -> file count
 	LastScanTime int64
-	scanLock     sync.Mutex
+	scanLock     sync.RWMutex
 }
 
 // ToMap converts a Project to a map representation.
 func (p *Project) ToMap() map[string]any {
+	p.scanLock.RLock()
+	defer p.scanLock.RUnlock()
+
 	return map[string]any{
 		"name":           p.Name,
 		"root_path":      p.RootPath,
 		"description":    p.Description,
-		"languages":      p.Languages,
+		"languages":      cloneLanguageCounts(p.Languages),
 		"last_scan_time": p.LastScanTime,
 	}
 }
@@ -122,7 +141,7 @@ func (p *Project) ScanFiles(registry LanguageDetector, excludedDirs []string) ma
 
 	// Skip if scanned recently (within 60 seconds)
 	if time.Now().Unix()-p.LastScanTime < 60 {
-		return p.Languages
+		return cloneLanguageCounts(p.Languages)
 	}
 
 	languages := make(map[string]int)
@@ -183,7 +202,15 @@ func (p *Project) ScanFiles(registry LanguageDetector, excludedDirs []string) ma
 
 	p.Languages = languages
 	p.LastScanTime = time.Now().Unix()
-	return languages
+	return cloneLanguageCounts(languages)
+}
+
+func cloneLanguageCounts(languages map[string]int) map[string]int {
+	clone := make(map[string]int, len(languages))
+	for language, count := range languages {
+		clone[language] = count
+	}
+	return clone
 }
 
 // ResolveFilePath returns a clean absolute path inside the project root.
@@ -208,10 +235,28 @@ func (p *Project) ResolveFilePath(relativePath string) (string, error) {
 	if rel == "." {
 		return candidate, nil
 	}
-	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return "", fmt.Errorf("path escapes project root: %s", relativePath)
 	}
+
+	// Lexical containment is insufficient when a path traverses a symlink.
+	// Resolve existing targets and ensure their real path remains in the project.
+	realRoot, rootErr := filepath.EvalSymlinks(root)
+	realCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+	if rootErr == nil && candidateErr == nil {
+		realRel, relErr := filepath.Rel(realRoot, realCandidate)
+		if relErr != nil || realRel == ".." || strings.HasPrefix(realRel, ".."+string(filepath.Separator)) || filepath.IsAbs(realRel) {
+			return "", fmt.Errorf("path escapes project root through a symlink: %s", relativePath)
+		}
+	}
 	return candidate, nil
+}
+
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // LanguageDetector is the interface for detecting languages from filenames.

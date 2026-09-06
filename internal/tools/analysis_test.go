@@ -1,7 +1,12 @@
 package tools
 
 import (
+	"path/filepath"
 	"testing"
+
+	"tree-sitter-mcp/internal/cache"
+	"tree-sitter-mcp/internal/language"
+	"tree-sitter-mcp/internal/models"
 )
 
 func TestJaccardSimilarity(t *testing.T) {
@@ -63,6 +68,51 @@ func TestJaccardSimilarity(t *testing.T) {
 				t.Errorf("jaccardSimilarity(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestExtractSymbolsReturnsNamesWithoutOuterCaptureDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "sample.go"), `package sample
+
+type Thing struct{}
+
+func Top() {}
+func (Thing) Method() {}
+`)
+	project := &models.Project{RootPath: dir}
+	registry := language.NewRegistry()
+	treeCache := cache.NewTreeCache(100, 300)
+	defer registry.Close()
+	defer treeCache.Close()
+
+	symbols, err := ExtractSymbols(project, "sample.go", registry, treeCache, []string{"functions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]bool)
+	for _, symbol := range symbols["functions"] {
+		got[symbol.Name] = true
+	}
+	if len(symbols["functions"]) != 2 || !got["Top"] || !got["Method"] {
+		t.Fatalf("functions = %#v, want exactly Top and Method", symbols["functions"])
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	for _, test := range []struct {
+		content string
+		want    int
+	}{
+		{"", 0},
+		{"one", 1},
+		{"one\n", 1},
+		{"one\ntwo", 2},
+		{"one\ntwo\n", 2},
+	} {
+		if got := countLines([]byte(test.content)); got != test.want {
+			t.Errorf("countLines(%q) = %d, want %d", test.content, got, test.want)
+		}
 	}
 }
 

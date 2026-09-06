@@ -88,6 +88,9 @@ func TestDiagnoseYamlConfigValid(t *testing.T) {
 	if after["language.default_max_depth"].(int) != 7 {
 		t.Errorf("language.default_max_depth = %v, want 7", after["language.default_max_depth"])
 	}
+	if got := cfgMgr.GetConfig().Cache.MaxSizeMB; got != 100 {
+		t.Fatalf("diagnostics mutated active config: cache.max_size_mb = %d, want 100", got)
+	}
 }
 
 func TestDiagnoseYamlConfigInvalidYaml(t *testing.T) {

@@ -102,6 +102,42 @@ func TestInvalidateSpecific(t *testing.T) {
 	}
 }
 
+func TestInvalidateSpecificDoesNotUseSubstringMatching(t *testing.T) {
+	c := NewTreeCache(100, 300)
+
+	c.mu.Lock()
+	c.entries["one"] = &CachedTree{Timestamp: time.Now(), FilePath: filepath.Join("root", "file.go")}
+	c.entries["two"] = &CachedTree{Timestamp: time.Now(), FilePath: filepath.Join("root", "file.go.bak")}
+	c.mu.Unlock()
+
+	c.Invalidate(filepath.Join("root", "file.go"))
+	if _, exists := c.entries["one"]; exists {
+		t.Fatal("exact cache entry was not invalidated")
+	}
+	if _, exists := c.entries["two"]; !exists {
+		t.Fatal("substring-related cache entry was incorrectly invalidated")
+	}
+}
+
+func TestPutReplacesEntryInsteadOfAccumulatingByModTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.go")
+	if err := os.WriteFile(path, []byte("package one"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c := NewTreeCache(100, 300)
+	c.Put(path, "go", nil, []byte("package one"))
+
+	if err := os.WriteFile(path, []byte("package two_longer"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c.Put(path, "go", nil, []byte("package two_longer"))
+
+	if len(c.entries) != 1 {
+		t.Fatalf("cache contains %d entries for one file, want 1", len(c.entries))
+	}
+}
+
 func TestInvalidateEmptyString(t *testing.T) {
 	c := NewTreeCache(100, 300)
 

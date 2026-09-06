@@ -61,6 +61,7 @@ func ExtractSymbols(
 	if err != nil {
 		return nil, err
 	}
+	defer tree.Close()
 
 	langObj, err := langReg.GetLanguage(lang)
 	if err != nil {
@@ -72,25 +73,32 @@ func ExtractSymbols(
 	for symbolType, queryStr := range queries {
 		query, qerr := sitter.NewQuery(langObj, queryStr)
 		if qerr != nil {
-			continue
+			return nil, fmt.Errorf("invalid %s symbol query for %s: %w", symbolType, lang, *qerr)
 		}
-		defer query.Close()
 
 		qc := sitter.NewQueryCursor()
-		captures := qc.Captures(query, tree.RootNode(), sourceBytes)
+		matches := qc.Matches(query, tree.RootNode(), sourceBytes)
+		captureNames := query.CaptureNames()
+		seen := make(map[string]bool)
 
 		for {
-			match, _ := captures.Next()
+			match := matches.Next()
 			if match == nil {
 				break
 			}
 
-			for _, cap := range match.Captures {
-				captureName := query.CaptureNames()[cap.Index]
+			selected := selectSymbolCaptures(match.Captures, captureNames, symbolType)
+			for _, cap := range selected {
+				captureName := captureNames[cap.Index]
 				name := strings.Trim(cap.Node.Utf8Text(sourceBytes), "\"'")
 
 				sp := cap.Node.StartPosition()
 				ep := cap.Node.EndPosition()
+				key := fmt.Sprintf("%s:%d:%d:%d:%d", name, sp.Row, sp.Column, ep.Row, ep.Column)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
 
 				symbols[symbolType] = append(symbols[symbolType], SymbolInfo{
 					Name: name,
@@ -106,9 +114,44 @@ func ExtractSymbols(
 			}
 		}
 		qc.Close()
+		query.Close()
 	}
 
 	return symbols, nil
+}
+
+func selectSymbolCaptures(captures []sitter.QueryCapture, names []string, symbolType string) []sitter.QueryCapture {
+	preferredSuffix := ".name"
+	for _, capture := range captures {
+		if strings.HasSuffix(names[capture.Index], preferredSuffix) {
+			var selected []sitter.QueryCapture
+			for _, candidate := range captures {
+				if strings.HasSuffix(names[candidate.Index], preferredSuffix) {
+					selected = append(selected, candidate)
+				}
+			}
+			return selected
+		}
+	}
+
+	if symbolType == "imports" {
+		var selected []sitter.QueryCapture
+		for _, capture := range captures {
+			if strings.Contains(names[capture.Index], ".") {
+				selected = append(selected, capture)
+			}
+		}
+		if len(selected) > 0 {
+			return selected
+		}
+	}
+
+	for _, capture := range captures {
+		if strings.Contains(names[capture.Index], ".") {
+			return []sitter.QueryCapture{capture}
+		}
+	}
+	return captures
 }
 
 func defaultSymbolTypes(lang string) []string {
@@ -150,7 +193,7 @@ func FindDependencies(
 	}
 
 	result := make(DependencyInfo)
-	var imports []string
+	imports := make([]string, 0)
 	for _, sym := range symbols["imports"] {
 		imports = append(imports, sym.Name)
 	}
@@ -186,8 +229,7 @@ func AnalyzeComplexity(
 		return nil, err
 	}
 
-	lines := strings.Split(string(data), "\n")
-	totalLines := len(lines)
+	totalLines := countLines(data)
 
 	symbols, err := ExtractSymbols(project, filePath, langReg, treeCache, []string{"functions"})
 	if err != nil {
@@ -205,7 +247,7 @@ func AnalyzeComplexity(
 		if loc, ok := f.Location["end_row"]; ok {
 			endRow = loc
 		}
-		totalFuncLen += int(endRow - startRow)
+		totalFuncLen += int(endRow-startRow) + 1
 	}
 
 	avgLen := 0
@@ -219,6 +261,17 @@ func AnalyzeComplexity(
 		FunctionCount: len(funcs),
 		AvgLength:     avgLen,
 	}, nil
+}
+
+func countLines(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	lines := strings.Count(string(data), "\n")
+	if data[len(data)-1] != '\n' {
+		lines++
+	}
+	return lines
 }
 
 // ProjectAnalysis holds overall project structure analysis.
@@ -315,8 +368,8 @@ func FindSimilarCode(
 	if maxResults <= 0 {
 		maxResults = 10
 	}
-	if minSimilarity <= 0 {
-		minSimilarity = 0.5
+	if minSimilarity < 0 || minSimilarity > 1 {
+		return nil, fmt.Errorf("min_similarity must be between 0 and 1")
 	}
 
 	absPath, err := project.ResolveFilePath(filePath)
@@ -335,9 +388,9 @@ func FindSimilarCode(
 	}
 
 	// Walk the project and compare fingerprints.
-	var results []SimilarCodeMatch
+	results := make([]SimilarCodeMatch, 0)
 	filter := NewProjectPathFilter(project.RootPath, excludedDirs)
-	_ = filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(project.RootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr
 		}
@@ -353,7 +406,7 @@ func FindSimilarCode(
 
 		relPath := filter.relativePath(path)
 
-		if relPath == filePath {
+		if sameFilePath(path, absPath) {
 			return nil // Skip self.
 		}
 
@@ -378,6 +431,9 @@ func FindSimilarCode(
 
 		return nil
 	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
 
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Similarity == results[j].Similarity {
@@ -393,6 +449,15 @@ func FindSimilarCode(
 	return results, nil
 }
 
+func sameFilePath(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if filepath.Separator == '\\' {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
 // generateFingerprint creates an AST structure fingerprint for a file.
 // Uses the sequence of node type names as a structural fingerprint.
 func generateFingerprint(
@@ -405,6 +470,7 @@ func generateFingerprint(
 	if err != nil {
 		return nil, err
 	}
+	defer tree.Close()
 
 	var fingerprint []string
 	collectNodeTypes(tree.RootNode(), &fingerprint, 3) // depth-limited for performance

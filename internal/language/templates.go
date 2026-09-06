@@ -1,6 +1,8 @@
 // Package language provides query templates for common code patterns.
 package language
 
+import "sort"
+
 // QueryTemplates holds tree-sitter query templates per language.
 var QueryTemplates = map[string]map[string]string{
 	"python": {
@@ -37,7 +39,10 @@ var QueryTemplates = map[string]map[string]string{
 		"assignments":    `(variable_declarator name: (_) @assign.target value: (_) @assign.value) @assign`,
 	},
 	"go": {
-		"functions":  `(function_declaration name: (identifier) @function.name) @function`,
+		"functions": `[
+			(function_declaration name: (identifier) @function.name)
+			(method_declaration name: (field_identifier) @function.name)
+		] @function`,
 		"structs":    `(type_declaration (type_spec name: (type_identifier) @struct.name type: (struct_type)) @struct)`,
 		"interfaces": `(type_declaration (type_spec name: (type_identifier) @interface.name type: (interface_type)) @interface)`,
 		"imports":    `(import_spec path: (interpreted_string_literal) @import.path) @import`,
@@ -133,5 +138,6 @@ func templateNames(templates map[string]string) []string {
 	for name := range templates {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }

@@ -3,6 +3,7 @@ package tools
 
 import (
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 
@@ -75,6 +76,11 @@ func (f *ProjectPathFilter) ShouldSkipFile(path string, info os.FileInfo) bool {
 	if info.IsDir() {
 		return true
 	}
+	// filepath.Walk uses Lstat. Reject links and special files so a project
+	// cannot expose a target outside its root or block on a named pipe.
+	if !info.Mode().IsRegular() {
+		return true
+	}
 	if !isAllowedRegularFile(path, info) {
 		return true
 	}
@@ -83,6 +89,59 @@ func (f *ProjectPathFilter) ShouldSkipFile(path string, info os.FileInfo) bool {
 		return true
 	}
 	return f.isIgnored(f.relativePath(path), false)
+}
+
+// matchProjectPattern matches slash-separated project paths. A ** segment
+// matches zero or more complete path segments; other segments use Go glob
+// syntax. Patterns without a slash are matched against the basename.
+func matchProjectPattern(pattern, relPath string) (bool, error) {
+	pattern = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(pattern)), "./")
+	relPath = strings.TrimPrefix(filepath.ToSlash(relPath), "./")
+	if pattern == "" || pattern == "*" || pattern == "**/*" {
+		return true, nil
+	}
+
+	patternParts := strings.Split(pattern, "/")
+	for _, part := range patternParts {
+		if part == "**" {
+			continue
+		}
+		if _, err := pathpkg.Match(part, ""); err != nil {
+			return false, err
+		}
+	}
+	if !strings.Contains(pattern, "/") {
+		return pathpkg.Match(pattern, pathpkg.Base(relPath))
+	}
+
+	pathParts := strings.Split(relPath, "/")
+	type state struct{ pattern, path int }
+	memo := make(map[state]bool)
+	seen := make(map[state]bool)
+	var match func(int, int) bool
+	match = func(patternIndex, pathIndex int) bool {
+		key := state{patternIndex, pathIndex}
+		if seen[key] {
+			return memo[key]
+		}
+		seen[key] = true
+
+		var matched bool
+		switch {
+		case patternIndex == len(patternParts):
+			matched = pathIndex == len(pathParts)
+		case patternParts[patternIndex] == "**":
+			matched = match(patternIndex+1, pathIndex) ||
+				(pathIndex < len(pathParts) && match(patternIndex, pathIndex+1))
+		case pathIndex < len(pathParts):
+			segmentMatch, _ := pathpkg.Match(patternParts[patternIndex], pathParts[pathIndex])
+			matched = segmentMatch && match(patternIndex+1, pathIndex+1)
+		}
+		memo[key] = matched
+		return matched
+	}
+
+	return match(0, 0), nil
 }
 
 func (f *ProjectPathFilter) relativePath(path string) string {

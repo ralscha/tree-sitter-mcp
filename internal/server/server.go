@@ -9,10 +9,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"tree-sitter-mcp/internal/config"
 	"tree-sitter-mcp/internal/container"
 	"tree-sitter-mcp/internal/language"
 	"tree-sitter-mcp/internal/models"
@@ -27,23 +29,30 @@ const (
 )
 
 type RunOptions struct {
-	Transport Transport
-	HTTPAddr  string
+	Transport   Transport
+	HTTPAddr    string
+	AllowRemote bool
 }
 
 // MCPServer wraps the MCP server and its dependencies.
 type MCPServer struct {
 	srv       *mcp.Server
 	container *container.Container
+	configMu  sync.Mutex
 }
 
 // NewMCPServer creates a new MCP server with all tools registered.
 func NewMCPServer() *MCPServer {
+	return NewMCPServerWithVersion("0.1.0")
+}
+
+// NewMCPServerWithVersion creates a server that reports the supplied build version.
+func NewMCPServerWithVersion(version string) *MCPServer {
 	ctr := container.NewContainer()
 
 	impl := &mcp.Implementation{
 		Name:    "tree_sitter",
-		Version: "0.1.0",
+		Version: version,
 	}
 
 	mcpServer := mcp.NewServer(impl, nil)
@@ -76,6 +85,9 @@ func (s *MCPServer) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	case StdioTransport:
 		return s.srv.Run(ctx, &mcp.StdioTransport{})
 	case HTTPTransport:
+		if !opts.AllowRemote && !config.IsLoopbackListenAddress(opts.HTTPAddr) {
+			return fmt.Errorf("refusing non-loopback HTTP listen address %q", opts.HTTPAddr)
+		}
 		return s.runHTTP(ctx, opts.HTTPAddr)
 	default:
 		return fmt.Errorf("unsupported transport %q, expected stdio or http", transport)
@@ -128,10 +140,16 @@ func readOnlyTool(name, description string) *mcp.Tool {
 // --- Tool argument types (used for automatic schema inference) ---
 
 type configureArgs struct {
-	ConfigPath    *string `json:"config_path,omitempty"`
-	CacheEnabled  *bool   `json:"cache_enabled,omitempty"`
-	MaxFileSizeMB *int    `json:"max_file_size_mb,omitempty"`
-	LogLevel      *string `json:"log_level,omitempty"`
+	ConfigPath        *string   `json:"config_path,omitempty"`
+	CacheEnabled      *bool     `json:"cache_enabled,omitempty"`
+	CacheMaxSizeMB    *int      `json:"cache_max_size_mb,omitempty"`
+	CacheTTLSeconds   *int      `json:"cache_ttl_seconds,omitempty"`
+	MaxFileSizeMB     *int      `json:"max_file_size_mb,omitempty"`
+	AllowedExtensions *[]string `json:"allowed_extensions,omitempty"`
+	ExcludedDirs      *[]string `json:"excluded_dirs,omitempty"`
+	DefaultMaxDepth   *int      `json:"default_max_depth,omitempty"`
+	MaxResultsDefault *int      `json:"max_results_default,omitempty"`
+	LogLevel          *string   `json:"log_level,omitempty"`
 }
 
 type registerProjectArgs struct {
@@ -277,7 +295,7 @@ func (s *MCPServer) registerTools() {
 	// --- configure ---
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "configure",
-		Description: "Configure the server settings (config_path, cache_enabled, max_file_size_mb, log_level).",
+		Description: "Configure cache, file security, AST depth, result limits, and logging settings, or load them from a config file.",
 	}, s.handleConfigure)
 
 	// --- register_project ---
@@ -353,7 +371,7 @@ func (s *MCPServer) registerTools() {
 	}, s.handleClearCache)
 
 	// --- build_query ---
-	mcp.AddTool(s.srv, readOnlyTool("build_query", "Combine multiple query templates or raw patterns (OR/AND) into a compound tree-sitter query."), s.handleBuildQuery)
+	mcp.AddTool(s.srv, readOnlyTool("build_query", "Combine query templates or raw patterns into a tree-sitter query union."), s.handleBuildQuery)
 
 	// --- adapt_query ---
 	mcp.AddTool(s.srv, readOnlyTool("adapt_query", "Adapt a tree-sitter query from one language to another by translating node type names."), s.handleAdaptQuery)
@@ -374,27 +392,70 @@ func (s *MCPServer) registerTools() {
 // --- Handler Implementations ---
 
 func (s *MCPServer) handleConfigure(ctx context.Context, req *mcp.CallToolRequest, args configureArgs) (*mcp.CallToolResult, any, error) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
 	cfgMgr := s.container.ConfigManager
+	if err := validateConfigureArgs(args); err != nil {
+		return nil, nil, err
+	}
 
 	if args.ConfigPath != nil && *args.ConfigPath != "" {
 		if err := cfgMgr.LoadFromFile(*args.ConfigPath); err != nil {
 			return nil, nil, fmt.Errorf("failed to load config: %w", err)
 		}
-		s.container.ApplyConfig()
 	}
 	if args.CacheEnabled != nil {
 		cfgMgr.UpdateValue("cache.enabled", *args.CacheEnabled)
-		s.container.TreeCache.SetEnabled(*args.CacheEnabled)
+	}
+	if args.CacheMaxSizeMB != nil {
+		cfgMgr.UpdateValue("cache.max_size_mb", *args.CacheMaxSizeMB)
+	}
+	if args.CacheTTLSeconds != nil {
+		cfgMgr.UpdateValue("cache.ttl_seconds", *args.CacheTTLSeconds)
 	}
 	if args.MaxFileSizeMB != nil {
 		cfgMgr.UpdateValue("security.max_file_size_mb", *args.MaxFileSizeMB)
-		s.container.ApplyConfig()
+	}
+	if args.AllowedExtensions != nil {
+		cfgMgr.UpdateValue("security.allowed_extensions", *args.AllowedExtensions)
+	}
+	if args.ExcludedDirs != nil {
+		cfgMgr.UpdateValue("security.excluded_dirs", *args.ExcludedDirs)
+	}
+	if args.DefaultMaxDepth != nil {
+		cfgMgr.UpdateValue("language.default_max_depth", *args.DefaultMaxDepth)
+	}
+	if args.MaxResultsDefault != nil {
+		cfgMgr.UpdateValue("max_results_default", *args.MaxResultsDefault)
 	}
 	if args.LogLevel != nil && *args.LogLevel != "" {
 		cfgMgr.UpdateValue("log_level", *args.LogLevel)
 	}
+	s.container.ApplyConfig()
 
 	return textResult(formatJSON(cfgMgr.ToMap())), nil, nil
+}
+
+func validateConfigureArgs(args configureArgs) error {
+	positive := []struct {
+		name  string
+		value *int
+	}{
+		{"cache_max_size_mb", args.CacheMaxSizeMB},
+		{"cache_ttl_seconds", args.CacheTTLSeconds},
+		{"max_file_size_mb", args.MaxFileSizeMB},
+		{"max_results_default", args.MaxResultsDefault},
+	}
+	for _, field := range positive {
+		if field.value != nil && *field.value <= 0 {
+			return fmt.Errorf("%s must be greater than zero", field.name)
+		}
+	}
+	if args.DefaultMaxDepth != nil && *args.DefaultMaxDepth < 0 {
+		return fmt.Errorf("default_max_depth must not be negative")
+	}
+	return nil
 }
 
 func (s *MCPServer) handleRegisterProject(ctx context.Context, req *mcp.CallToolRequest, args registerProjectArgs) (*mcp.CallToolResult, any, error) {
@@ -426,7 +487,7 @@ func (s *MCPServer) handleRemoveProject(ctx context.Context, req *mcp.CallToolRe
 	if err := s.container.ProjectRegistry.RemoveProject(args.Name); err != nil {
 		return nil, nil, fmt.Errorf("failed to remove project: %w", err)
 	}
-	return textResult(fmt.Sprintf(`{"status":"success","message":"Project '%s' removed"}`, args.Name)), nil, nil
+	return textResult(formatJSON(map[string]string{"status": "success", "message": fmt.Sprintf("Project %q removed", args.Name)})), nil, nil
 }
 
 func (s *MCPServer) handleListLanguages(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
@@ -439,9 +500,9 @@ func (s *MCPServer) handleListLanguages(ctx context.Context, req *mcp.CallToolRe
 
 func (s *MCPServer) handleCheckLanguage(ctx context.Context, req *mcp.CallToolRequest, args languageNameArgs) (*mcp.CallToolResult, any, error) {
 	if s.container.LanguageRegistry.IsLanguageAvailable(args.Language) {
-		return textResult(fmt.Sprintf(`{"status":"success","message":"Language '%s' is available"}`, args.Language)), nil, nil
+		return textResult(formatJSON(map[string]string{"status": "success", "message": fmt.Sprintf("Language %q is available", args.Language)})), nil, nil
 	}
-	return textResult(fmt.Sprintf(`{"status":"error","message":"Language '%s' is not available"}`, args.Language)), nil, nil
+	return textResult(formatJSON(map[string]string{"status": "error", "message": fmt.Sprintf("Language %q is not available", args.Language)})), nil, nil
 }
 
 func (s *MCPServer) handleListFiles(ctx context.Context, req *mcp.CallToolRequest, args listFilesArgs) (*mcp.CallToolResult, any, error) {
@@ -464,6 +525,12 @@ func (s *MCPServer) handleListFiles(ctx context.Context, req *mcp.CallToolReques
 }
 
 func (s *MCPServer) handleGetFile(ctx context.Context, req *mcp.CallToolRequest, args getFileArgs) (*mcp.CallToolResult, any, error) {
+	if args.StartLine != nil && *args.StartLine < 0 {
+		return nil, nil, fmt.Errorf("start_line must not be negative")
+	}
+	if args.MaxLines != nil && *args.MaxLines <= 0 {
+		return nil, nil, fmt.Errorf("max_lines must be greater than zero")
+	}
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project error: %w", err)
@@ -505,6 +572,9 @@ func (s *MCPServer) handleGetAST(ctx context.Context, req *mcp.CallToolRequest, 
 	if args.MaxDepth != nil {
 		maxDepth = *args.MaxDepth
 	}
+	if maxDepth < 0 {
+		return nil, nil, fmt.Errorf("max_depth must not be negative")
+	}
 
 	includeText := true
 	if args.IncludeText != nil {
@@ -519,6 +589,9 @@ func (s *MCPServer) handleGetAST(ctx context.Context, req *mcp.CallToolRequest, 
 }
 
 func (s *MCPServer) handleGetNodeAtPosition(ctx context.Context, req *mcp.CallToolRequest, args nodePosArgs) (*mcp.CallToolResult, any, error) {
+	if args.Row < 0 || args.Column < 0 {
+		return nil, nil, fmt.Errorf("row and column must not be negative")
+	}
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project error: %w", err)
@@ -537,6 +610,7 @@ func (s *MCPServer) handleGetNodeAtPosition(ctx context.Context, req *mcp.CallTo
 	if err != nil {
 		return nil, nil, fmt.Errorf("error parsing file: %w", err)
 	}
+	defer tree.Close()
 
 	node := tools.FindNodeAtPos(tree.RootNode(), args.Row, args.Column)
 	if node == nil {
@@ -548,6 +622,9 @@ func (s *MCPServer) handleGetNodeAtPosition(ctx context.Context, req *mcp.CallTo
 }
 
 func (s *MCPServer) handleGetParseDiagnostics(ctx context.Context, req *mcp.CallToolRequest, args parseDiagnosticsArgs) (*mcp.CallToolResult, any, error) {
+	if args.MaxIssues != nil && *args.MaxIssues <= 0 {
+		return nil, nil, fmt.Errorf("max_issues must be greater than zero")
+	}
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project error: %w", err)
@@ -571,12 +648,18 @@ func (s *MCPServer) handleGetParseDiagnostics(ctx context.Context, req *mcp.Call
 }
 
 func (s *MCPServer) handleFindText(ctx context.Context, req *mcp.CallToolRequest, args findTextArgs) (*mcp.CallToolResult, any, error) {
+	if args.MaxResults != nil && *args.MaxResults <= 0 {
+		return nil, nil, fmt.Errorf("max_results must be greater than zero")
+	}
+	if args.ContextLines != nil && *args.ContextLines < 0 {
+		return nil, nil, fmt.Errorf("context_lines must not be negative")
+	}
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project error: %w", err)
 	}
 
-	maxResults := 100
+	maxResults := s.container.GetConfig().MaxResultsDefault
 	if args.MaxResults != nil {
 		maxResults = *args.MaxResults
 	}
@@ -612,12 +695,15 @@ func (s *MCPServer) handleFindText(ctx context.Context, req *mcp.CallToolRequest
 }
 
 func (s *MCPServer) handleRunQuery(ctx context.Context, req *mcp.CallToolRequest, args runQueryArgs) (*mcp.CallToolResult, any, error) {
+	if args.MaxResults != nil && *args.MaxResults <= 0 {
+		return nil, nil, fmt.Errorf("max_results must be greater than zero")
+	}
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project error: %w", err)
 	}
 
-	maxResults := 100
+	maxResults := s.container.GetConfig().MaxResultsDefault
 	if args.MaxResults != nil {
 		maxResults = *args.MaxResults
 	}
@@ -751,7 +837,7 @@ func (s *MCPServer) handleFindUsage(ctx context.Context, req *mcp.CallToolReques
 
 	query := fmt.Sprintf(`((identifier) @reference (#eq? @reference %s))`, strconv.Quote(args.Symbol))
 	cfg := s.container.GetConfig()
-	results, err := tools.RunQuery(project, query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, 100, "", false, cfg.Security.ExcludedDirs)
+	results, err := tools.RunQuery(project, query, s.container.LanguageRegistry, s.container.TreeCache, filePath, lang, cfg.MaxResultsDefault, "", false, cfg.Security.ExcludedDirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("usage search error: %w", err)
 	}
@@ -793,6 +879,12 @@ func (s *MCPServer) handleGetNodeTypes(ctx context.Context, req *mcp.CallToolReq
 }
 
 func (s *MCPServer) handleFindSimilarCode(ctx context.Context, req *mcp.CallToolRequest, args findSimilarCodeArgs) (*mcp.CallToolResult, any, error) {
+	if args.MaxResults != nil && *args.MaxResults <= 0 {
+		return nil, nil, fmt.Errorf("max_results must be greater than zero")
+	}
+	if args.MinSimilarity != nil && (*args.MinSimilarity < 0 || *args.MinSimilarity > 1) {
+		return nil, nil, fmt.Errorf("min_similarity must be between 0 and 1")
+	}
 	project, err := s.container.ProjectRegistry.GetProject(args.Project)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project error: %w", err)
@@ -830,21 +922,29 @@ func (s *MCPServer) handleClearCache(ctx context.Context, req *mcp.CallToolReque
 		filePath = *args.FilePath
 	}
 
-	if projName != "" && filePath != "" {
+	if filePath != "" && projName == "" {
+		return nil, nil, fmt.Errorf("project is required when file_path is provided")
+	}
+	if projName != "" {
 		project, err := s.container.ProjectRegistry.GetProject(projName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("project error: %w", err)
 		}
-		absPath, err := project.ResolveFilePath(filePath)
-		if err != nil {
-			return nil, nil, err
+		target := project.RootPath
+		message := fmt.Sprintf("Cache cleared for project %s", projName)
+		if filePath != "" {
+			target, err = project.ResolveFilePath(filePath)
+			if err != nil {
+				return nil, nil, err
+			}
+			message = fmt.Sprintf("Cache cleared for %s in %s", filePath, projName)
 		}
-		s.container.TreeCache.Invalidate(absPath)
-		return textResult(fmt.Sprintf(`{"status":"success","message":"Cache cleared for %s in %s"}`, filePath, projName)), nil, nil
+		s.container.TreeCache.Invalidate(target)
+		return textResult(formatJSON(map[string]string{"status": "success", "message": message})), nil, nil
 	}
 
 	s.container.TreeCache.Invalidate()
-	return textResult(`{"status":"success","message":"All caches cleared"}`), nil, nil
+	return textResult(formatJSON(map[string]string{"status": "success", "message": "All caches cleared"})), nil, nil
 }
 
 // --- Prompts ---
@@ -1137,7 +1237,7 @@ func textResult(text string) *mcp.CallToolResult {
 func formatJSON(v any) string {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return `{"error":` + strconv.Quote(err.Error()) + `}`
 	}
 	return string(data)
 }

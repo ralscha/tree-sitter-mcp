@@ -99,6 +99,7 @@ Starting tree-sitter MCP server (cache: true, max_file_size: 5MB, max_depth: 5)
 ## Configuration
 
 Create a YAML config file. Defaults are used when no config file is supplied.
+If `--config` names a missing file, startup logs an explicit warning instead of silently treating the typo as an empty configuration. Unknown YAML fields and invalid non-positive limits are rejected.
 
 ```yaml
 cache:
@@ -136,6 +137,8 @@ Environment variable overrides currently supported:
 - `MCP_TRANSPORT` (`stdio` or `http`)
 - `MCP_HTTP_ADDR`
 - `MCP_HTTP_ALLOW_REMOTE` (`true` to allow non-loopback HTTP binding)
+
+The `configure` MCP tool can update the same runtime settings without restarting the server: cache enablement/size/TTL, maximum file size, allowed extensions, excluded directories, default AST depth, default result count, and log level. `max_results_default` is used by text search, tree-sitter queries, and usage search when a call does not provide its own limit.
 
 ## MCP Tools
 
@@ -205,6 +208,8 @@ Environment variable overrides currently supported:
 | `configure` | Dynamically reconfigure server settings at runtime |
 | `clear_cache` | Clear the parse tree cache, optionally scoped to project/file |
 | `diagnose_config` | Diagnose YAML configuration loading issues |
+
+`list_files` and `find_text` accept slash-separated glob patterns. `**` matches recursively (for example, `src/**/*.go`), while a pattern without a slash matches basenames. `get_file.start_line` is one-based; `0` or an omitted value starts at the beginning.
 
 ## Language Support
 

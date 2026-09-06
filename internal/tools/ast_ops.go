@@ -57,6 +57,7 @@ func GetFileAST(
 	if err != nil {
 		return nil, err
 	}
+	defer tree.Close()
 
 	depth := 5
 	if maxDepth != nil {
@@ -107,10 +108,13 @@ func ParseFile(
 		return nil, nil, fmt.Errorf("parsing %s returned nil tree", filePath)
 	}
 
-	// Cache the result if caching is enabled.
-	if treeCache.IsEnabled() {
-		treeCache.Put(filePath, language, tree, sourceBytes)
+	// Every ParseFile result is caller-owned. The cache retains the original
+	// tree and callers receive an independently closeable clone.
+	result := tree.Clone()
+	if treeCache.Put(filePath, language, tree, sourceBytes) {
+		return result, sourceBytes, nil
 	}
+	result.Close()
 
 	return tree, sourceBytes, nil
 }
@@ -143,6 +147,7 @@ func GetParseDiagnostics(
 	if err != nil {
 		return nil, err
 	}
+	defer tree.Close()
 
 	if maxIssues <= 0 {
 		maxIssues = 100

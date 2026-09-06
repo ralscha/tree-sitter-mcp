@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -139,51 +141,71 @@ func (c *RuntimeConfig) validate() error {
 	if c.Transport != TransportStdio && c.Transport != TransportHTTP {
 		return fmt.Errorf("transport must be 'stdio' or 'http', got '%s'", c.Transport)
 	}
-	if c.Transport == TransportHTTP && !c.AllowRemote && isWildcardListenAddress(c.HTTPAddr) {
+	if c.Transport == TransportHTTP && !c.AllowRemote && !IsLoopbackListenAddress(c.HTTPAddr) {
 		return fmt.Errorf("refusing non-loopback HTTP listen address %q; use --allow-remote-http to override", c.HTTPAddr)
 	}
 	return nil
 }
 
-func isWildcardListenAddress(addr string) bool {
+// IsLoopbackListenAddress reports whether addr is a valid host:port bound to
+// localhost or a loopback IP address.
+func IsLoopbackListenAddress(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		// Inputs like ":8080" and malformed values should be treated as potentially unsafe.
-		return strings.HasPrefix(addr, ":") || addr == ""
+		return false
 	}
 
 	host = strings.Trim(host, "[]")
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	return false
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
-// LoadFromFile loads configuration from a YAML file, falling back to defaults.
+// LoadFromFile loads configuration from a YAML file on top of the defaults.
 func LoadFromFile(path string) (*ServerConfig, error) {
 	cfg := DefaultConfig()
 
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil // Return defaults if file doesn't exist
-		}
 		return nil, err
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return cfg, err
 	}
 
 	// Apply environment variable overrides.
 	applyEnvOverrides(cfg)
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+func validateConfig(cfg *ServerConfig) error {
+	switch {
+	case cfg.Cache.MaxSizeMB <= 0:
+		return fmt.Errorf("cache.max_size_mb must be greater than zero")
+	case cfg.Cache.TTLSeconds <= 0:
+		return fmt.Errorf("cache.ttl_seconds must be greater than zero")
+	case cfg.Security.MaxFileSizeMB <= 0:
+		return fmt.Errorf("security.max_file_size_mb must be greater than zero")
+	case cfg.Language.DefaultMaxDepth < 0:
+		return fmt.Errorf("language.default_max_depth must not be negative")
+	case cfg.MaxResultsDefault <= 0:
+		return fmt.Errorf("max_results_default must be greater than zero")
+	}
+	return nil
 }
 
 // applyEnvOverrides applies environment variable overrides.
 func applyEnvOverrides(cfg *ServerConfig) {
 	if v := strings.TrimSpace(os.Getenv("TREE_SITTER_MCP_LOG_LEVEL")); v != "" {
-		cfg.LogLevel = v
+		cfg.LogLevel = strings.ToUpper(v)
 	}
 	if v := strings.TrimSpace(os.Getenv("TREE_SITTER_MCP_CACHE_MAX_SIZE_MB")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -194,53 +216,70 @@ func applyEnvOverrides(cfg *ServerConfig) {
 
 // ConfigurationManager manages runtime configuration updates.
 type ConfigurationManager struct {
+	mu     sync.RWMutex
 	config *ServerConfig
 }
 
 // NewConfigurationManager creates a new ConfigurationManager with defaults.
 func NewConfigurationManager() *ConfigurationManager {
-	return &ConfigurationManager{config: DefaultConfig()}
+	cfg := DefaultConfig()
+	applyEnvOverrides(cfg)
+	return &ConfigurationManager{config: cfg}
 }
 
 // GetConfig returns the current configuration.
 func (m *ConfigurationManager) GetConfig() *ServerConfig {
-	return m.config
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return cloneConfig(m.config)
 }
 
-// LoadFromFile loads configuration from a file and merges with current config.
+// LoadFromFile replaces the active configuration with defaults plus file values.
 func (m *ConfigurationManager) LoadFromFile(path string) error {
 	cfg, err := LoadFromFile(path)
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.config = cfg
 	return nil
 }
 
 // UpdateValue updates a single configuration value by dotted path.
-// Supported paths: "cache.enabled", "cache.max_size_mb", "cache.ttl_seconds",
-// "security.max_file_size_mb", "language.default_max_depth", "log_level",
-// "max_results_default".
+// Supported paths cover cache settings, security limits and filters, the
+// default AST depth, log level, and default result limit.
 func (m *ConfigurationManager) UpdateValue(path string, value any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	switch path {
 	case "cache.enabled":
 		if v, ok := value.(bool); ok {
 			m.config.Cache.Enabled = v
 		}
 	case "cache.max_size_mb":
-		if v, ok := value.(int); ok {
+		if v, ok := value.(int); ok && v > 0 {
 			m.config.Cache.MaxSizeMB = v
 		}
 	case "cache.ttl_seconds":
-		if v, ok := value.(int); ok {
+		if v, ok := value.(int); ok && v > 0 {
 			m.config.Cache.TTLSeconds = v
 		}
 	case "security.max_file_size_mb":
-		if v, ok := value.(int); ok {
+		if v, ok := value.(int); ok && v > 0 {
 			m.config.Security.MaxFileSizeMB = v
 		}
+	case "security.excluded_dirs":
+		if v, ok := value.([]string); ok {
+			m.config.Security.ExcludedDirs = append([]string(nil), v...)
+		}
+	case "security.allowed_extensions":
+		if v, ok := value.([]string); ok {
+			m.config.Security.AllowedExtensions = append([]string(nil), v...)
+		}
 	case "language.default_max_depth":
-		if v, ok := value.(int); ok {
+		if v, ok := value.(int); ok && v >= 0 {
 			m.config.Language.DefaultMaxDepth = v
 		}
 	case "log_level":
@@ -248,7 +287,7 @@ func (m *ConfigurationManager) UpdateValue(path string, value any) {
 			m.config.LogLevel = strings.ToUpper(v)
 		}
 	case "max_results_default":
-		if v, ok := value.(int); ok {
+		if v, ok := value.(int); ok && v > 0 {
 			m.config.MaxResultsDefault = v
 		}
 	}
@@ -256,7 +295,7 @@ func (m *ConfigurationManager) UpdateValue(path string, value any) {
 
 // ToMap converts the configuration to a map for MCP responses.
 func (m *ConfigurationManager) ToMap() map[string]any {
-	cfg := m.config
+	cfg := m.GetConfig()
 	return map[string]any{
 		"cache": map[string]any{
 			"enabled":     cfg.Cache.Enabled,
@@ -275,4 +314,15 @@ func (m *ConfigurationManager) ToMap() map[string]any {
 		"log_level":           cfg.LogLevel,
 		"max_results_default": cfg.MaxResultsDefault,
 	}
+}
+
+func cloneConfig(cfg *ServerConfig) *ServerConfig {
+	if cfg == nil {
+		return nil
+	}
+	clone := *cfg
+	clone.Security.ExcludedDirs = append([]string(nil), cfg.Security.ExcludedDirs...)
+	clone.Security.AllowedExtensions = append([]string(nil), cfg.Security.AllowedExtensions...)
+	clone.Language.PreferredLanguages = append([]string(nil), cfg.Language.PreferredLanguages...)
+	return &clone
 }

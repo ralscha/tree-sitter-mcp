@@ -3,6 +3,7 @@ package cache
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,8 @@ type CachedTree struct {
 	Timestamp  time.Time
 	FileSize   int64
 	ModifiedAt time.Time
+	FilePath   string
+	Language   string
 }
 
 // TreeCache provides thread-safe caching of parsed syntax trees.
@@ -58,6 +61,9 @@ func (c *TreeCache) SetEnabled(enabled bool) {
 func (c *TreeCache) SetMaxSizeMB(maxSizeMB float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if maxSizeMB <= 0 {
+		maxSizeMB = 100
+	}
 	c.maxSizeMB = maxSizeMB
 	c.evict()
 }
@@ -80,24 +86,23 @@ func (c *TreeCache) IsEnabled() bool {
 }
 
 func (c *TreeCache) makeKey(filePath, language string) (string, error) {
-	info, err := os.Stat(filePath)
-	if err != nil {
+	if _, err := os.Stat(filePath); err != nil {
 		return "", err
 	}
-	return language + ":" + filePath + ":" + info.ModTime().String(), nil
+	return language + "\x00" + normalizePath(filePath), nil
 }
 
 // Get retrieves a cached tree if available and not expired.
 func (c *TreeCache) Get(filePath, language string) (*sitter.Tree, []byte, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.enabled {
+	info, err := os.Stat(filePath)
+	if err != nil {
 		return nil, nil, false
 	}
+	key := language + "\x00" + normalizePath(filePath)
 
-	key, err := c.makeKey(filePath, language)
-	if err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.enabled {
 		return nil, nil, false
 	}
 
@@ -106,47 +111,51 @@ func (c *TreeCache) Get(filePath, language string) (*sitter.Tree, []byte, bool) 
 		return nil, nil, false
 	}
 
-	if time.Since(entry.Timestamp) > c.ttl {
+	if time.Since(entry.Timestamp) > c.ttl ||
+		!info.ModTime().Equal(entry.ModifiedAt) || info.Size() != entry.FileSize {
+		entry.Close()
+		delete(c.entries, key)
 		return nil, nil, false
 	}
 
-	info, err := os.Stat(filePath)
-	if err != nil || info.ModTime() != entry.ModifiedAt {
-		return nil, nil, false
+	if entry.Tree == nil {
+		return nil, entry.Source, true
 	}
-
-	return entry.Tree, entry.Source, true
+	return entry.Tree.Clone(), entry.Source, true
 }
 
-// Put stores a parsed tree in the cache.
-func (c *TreeCache) Put(filePath, language string, tree *sitter.Tree, source []byte) {
+// Put stores a parsed tree in the cache and takes ownership of tree. It returns
+// false only when caching is disabled or file metadata cannot be read.
+func (c *TreeCache) Put(filePath, language string, tree *sitter.Tree, source []byte) bool {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return false
+	}
+	key := language + "\x00" + normalizePath(filePath)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if !c.enabled {
-		return
+		return false
 	}
 
-	key, err := c.makeKey(filePath, language)
-	if err != nil {
-		return
-	}
-
-	info, _ := os.Stat(filePath)
-	modTime := time.Now()
-	if info != nil {
-		modTime = info.ModTime()
+	if previous := c.entries[key]; previous != nil {
+		previous.Close()
 	}
 
 	c.entries[key] = &CachedTree{
 		Tree:       tree,
 		Source:     source,
 		Timestamp:  time.Now(),
-		FileSize:   int64(len(source)),
-		ModifiedAt: modTime,
+		FileSize:   info.Size(),
+		ModifiedAt: info.ModTime(),
+		FilePath:   normalizePath(filePath),
+		Language:   language,
 	}
 
 	c.evict()
+	return true
 }
 
 // Invalidate clears cache entries.
@@ -159,9 +168,14 @@ func (c *TreeCache) Invalidate(filePath ...string) {
 		return
 	}
 
-	for key := range c.entries {
-		if containsPath(key, filePath[0]) {
-			c.entries[key].Close()
+	target := normalizePath(filePath[0])
+	for key, entry := range c.entries {
+		entryPath := entry.FilePath
+		if entryPath == "" {
+			entryPath = normalizePath(key)
+		}
+		if containsPath(entryPath, target) {
+			entry.Close()
 			delete(c.entries, key)
 		}
 	}
@@ -190,7 +204,17 @@ func (ct *CachedTree) Close() {
 }
 
 func containsPath(key, path string) bool {
-	return strings.Contains(key, path)
+	key = normalizePath(key)
+	path = normalizePath(path)
+	return key == path || strings.HasPrefix(key, path+string(filepath.Separator))
+}
+
+func normalizePath(path string) string {
+	path = filepath.Clean(path)
+	if filepath.Separator == '\\' {
+		path = strings.ToLower(path)
+	}
+	return path
 }
 
 func (c *TreeCache) evict() {
