@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload dist artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dist-linux-windows
           path: dist/
@@ -76,7 +76,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload dist artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dist-darwin
           path: dist/
@@ -91,7 +91,7 @@ jobs:
 
     steps:
       - name: Download all dist artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: dist-merged
@@ -103,7 +103,7 @@ jobs:
           sha256sum *.tar.gz *.zip > checksums.txt
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist-merged/*
           fail_on_unmatched_files: false
