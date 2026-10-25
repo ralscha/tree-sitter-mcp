@@ -91,7 +91,7 @@ jobs:
 
     steps:
       - name: Download all dist artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: dist-merged
