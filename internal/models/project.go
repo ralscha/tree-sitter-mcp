@@ -3,6 +3,7 @@ package models
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -207,9 +208,7 @@ func (p *Project) ScanFiles(registry LanguageDetector, excludedDirs []string) ma
 
 func cloneLanguageCounts(languages map[string]int) map[string]int {
 	clone := make(map[string]int, len(languages))
-	for language, count := range languages {
-		clone[language] = count
-	}
+	maps.Copy(clone, languages)
 	return clone
 }
 

@@ -18,12 +18,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -36,7 +36,7 @@ jobs:
           sudo tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
 
       - name: Run GoReleaser (linux + windows)
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@v7.3.0
         with:
           distribution: goreleaser
           version: '~> v2'
@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload dist artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: dist-linux-windows
           path: dist/
@@ -57,17 +57,17 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
       - name: Run GoReleaser (darwin)
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@v7.3.0
         with:
           distribution: goreleaser
           version: '~> v2'
@@ -76,7 +76,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload dist artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: dist-darwin
           path: dist/
@@ -91,7 +91,7 @@ jobs:
 
     steps:
       - name: Download all dist artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: dist-*
           path: dist-merged
@@ -103,7 +103,7 @@ jobs:
           sha256sum *.tar.gz *.zip > checksums.txt
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.4
         with:
           files: dist-merged/*
           fail_on_unmatched_files: false

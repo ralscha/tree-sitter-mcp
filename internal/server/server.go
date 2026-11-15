@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1014,19 +1015,19 @@ func (s *MCPServer) handleCodeReviewPrompt(ctx context.Context, req *mcp.GetProm
 	lang := s.container.LanguageRegistry.LanguageForFile(filePath)
 
 	// Get structure info.
-	structure := ""
+	var structure strings.Builder
 	symbols, symErr := tools.ExtractSymbols(project, filePath, s.container.LanguageRegistry, s.container.TreeCache, nil)
 	if symErr == nil {
 		if funcs, ok := symbols["functions"]; ok && len(funcs) > 0 {
-			structure += "\nFunctions:\n"
+			structure.WriteString("\nFunctions:\n")
 			for _, f := range funcs {
-				structure += fmt.Sprintf("- %s\n", f.Name)
+				structure.WriteString(fmt.Sprintf("- %s\n", f.Name))
 			}
 		}
 		if classes, ok := symbols["classes"]; ok && len(classes) > 0 {
-			structure += "\nClasses:\n"
+			structure.WriteString("\nClasses:\n")
 			for _, c := range classes {
-				structure += fmt.Sprintf("- %s\n", c.Name)
+				structure.WriteString(fmt.Sprintf("- %s\n", c.Name))
 			}
 		}
 	}
@@ -1043,7 +1044,7 @@ Focus on:
 1. Code clarity and organization
 2. Potential bugs or issues
 3. Performance considerations
-4. Best practices for %s`, lang, lang, content, structure, lang)
+4. Best practices for %s`, lang, lang, content, structure.String(), lang)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Code review for %s", filePath),
@@ -1186,9 +1187,9 @@ func (s *MCPServer) handleProjectOverviewPrompt(ctx context.Context, req *mcp.Ge
 		return nil, fmt.Errorf("analysis error: %w", err)
 	}
 
-	languagesStr := ""
+	var languagesStr strings.Builder
 	for lang, count := range analysis.Languages {
-		languagesStr += fmt.Sprintf("- %s: %d files\n", lang, count)
+		languagesStr.WriteString(fmt.Sprintf("- %s: %d files\n", lang, count))
 	}
 
 	topFilesStr := ""
@@ -1214,7 +1215,7 @@ Please provide:
 1. An overview of the project structure
 2. The likely purpose and architecture
 3. Key entry points and build configuration
-4. Any notable patterns or conventions`, project.Name, project.RootPath, languagesStr, topFilesStr)
+4. Any notable patterns or conventions`, project.Name, project.RootPath, languagesStr.String(), topFilesStr)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Project overview for %s", projectName),

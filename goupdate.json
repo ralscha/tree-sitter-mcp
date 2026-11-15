@@ -1,0 +1,15 @@
+{
+  "env": {
+    "CGO_ENABLED": "1"
+  },
+  "platforms": {
+    "windows": {
+      "env": {
+        "CGO_ENABLED": "1",
+        "CC": "${DIR}/../../preblog/cgo/llvm/bin/gcc.exe",
+        "CXX": "${DIR}/../../preblog/cgo/llvm/bin/g++.exe",
+        "PATH": "${DIR}/../../preblog/cgo/llvm/bin;${DIR}/../../preblog/cgo/llvm/x86_64-w64-mingw32/bin;${PATH}"
+      }
+    }
+  }
+}
