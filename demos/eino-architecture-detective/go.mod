@@ -41,7 +41,7 @@ require (
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/arch v0.33.0 // indirect
-	golang.org/x/exp v0.0.0-20261121134650-e1094eeca1b5 // indirect
+	golang.org/x/exp v0.0.0-20261124000051-d6646c509b6d // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

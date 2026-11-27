@@ -168,10 +168,11 @@ type languageNameArgs struct {
 }
 
 type listFilesArgs struct {
-	Project    string   `json:"project"`
-	Pattern    *string  `json:"pattern,omitempty"`
-	MaxDepth   *int     `json:"max_depth,omitempty"`
-	Extensions []string `json:"extensions,omitempty"`
+	CountByLanguage bool     `json:"count_by_language,omitempty" jsonschema:"Return file counts by detected language instead of paths"`
+	Project         string   `json:"project"`
+	Pattern         *string  `json:"pattern,omitempty"`
+	MaxDepth        *int     `json:"max_depth,omitempty"`
+	Extensions      []string `json:"extensions,omitempty"`
 }
 
 type getFileArgs struct {
@@ -238,6 +239,7 @@ type listQueryTemplatesArgs struct {
 }
 
 type getSymbolsArgs struct {
+	NamePrefix  string   `json:"name_prefix,omitempty" jsonschema:"Only include symbols whose names start with this prefix"`
 	Project     string   `json:"project"`
 	FilePath    string   `json:"file_path"`
 	SymbolTypes []string `json:"symbol_types,omitempty"`
@@ -522,6 +524,17 @@ func (s *MCPServer) handleListFiles(ctx context.Context, req *mcp.CallToolReques
 	if err != nil {
 		return nil, nil, fmt.Errorf("error listing files: %w", err)
 	}
+	if args.CountByLanguage {
+		counts := make(map[string]int)
+		for _, path := range files {
+			lang := s.container.LanguageRegistry.LanguageForFile(path)
+			if lang == "" {
+				lang = "unknown"
+			}
+			counts[lang]++
+		}
+		return textResult(formatJSON(counts)), nil, nil
+	}
 	return textResult(formatJSON(files)), nil, nil
 }
 
@@ -765,6 +778,17 @@ func (s *MCPServer) handleGetSymbols(ctx context.Context, req *mcp.CallToolReque
 	symbols, err := tools.ExtractSymbols(project, args.FilePath, s.container.LanguageRegistry, s.container.TreeCache, args.SymbolTypes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("symbol extraction error: %w", err)
+	}
+	if args.NamePrefix != "" {
+		for kind, items := range symbols {
+			filtered := items[:0]
+			for _, item := range items {
+				if strings.HasPrefix(item.Name, args.NamePrefix) {
+					filtered = append(filtered, item)
+				}
+			}
+			symbols[kind] = filtered
+		}
 	}
 	return textResult(formatJSON(symbols)), nil, nil
 }

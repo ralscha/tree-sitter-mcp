@@ -2,6 +2,7 @@
 package tools
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,22 +85,27 @@ func GetFileContent(project *models.Project, path string, maxLines *int, startLi
 		return "", err
 	}
 
-	lines := strings.Split(string(data), "\n")
-
-	// Line numbers exposed by the tools are one-based. Zero keeps the
-	// historical default of starting at the beginning of the file.
-	if startLine > 1 {
-		if startLine > len(lines) {
+	// Skip directly to the requested byte range. Building a slice for every
+	// line is expensive for a file with many short lines.
+	for line := 1; line < startLine; line++ {
+		next := bytes.IndexByte(data, '\n')
+		if next < 0 {
 			return "", nil
 		}
-		lines = lines[startLine-1:]
+		data = data[next+1:]
 	}
-
-	if maxLines != nil && *maxLines > 0 && *maxLines < len(lines) {
-		lines = lines[:*maxLines]
+	if maxLines != nil && *maxLines > 0 {
+		offset := 0
+		for range *maxLines {
+			next := bytes.IndexByte(data[offset:], '\n')
+			if next < 0 {
+				return string(data), nil
+			}
+			offset += next + 1
+		}
+		data = data[:offset-1]
 	}
-
-	return strings.Join(lines, "\n"), nil
+	return string(data), nil
 }
 
 // GetFileInfo returns metadata about a file in a project.
